@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+onlyBuiltDependencies:
+  - "esbuild"
+  - "@tauri-apps/cli"
+allowBuilds:
+  '0': esbuild
+  '1': '@tauri-apps/cli'
+  esbuild: true
