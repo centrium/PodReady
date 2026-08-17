@@ -6,6 +6,9 @@ pub enum AppError {
     #[error("We couldn't read the audio in this file.")]
     MediaInspectionFailed(String),
 
+    #[error("We couldn't analyse the audio in this file.")]
+    AudioAnalysisFailed(String),
+
     #[error("The media format is not supported.")]
     UnsupportedFormat,
 
@@ -28,6 +31,10 @@ impl Serialize for AppError {
             AppError::MediaInspectionFailed(_) => ErrorResponse {
                 message: self.to_string(),
                 code: "MEDIA_INSPECTION_FAILED".to_string(),
+            },
+            AppError::AudioAnalysisFailed(_) => ErrorResponse {
+                message: self.to_string(),
+                code: "AUDIO_ANALYSIS_FAILED".to_string(),
             },
             AppError::UnsupportedFormat => ErrorResponse {
                 message: self.to_string(),

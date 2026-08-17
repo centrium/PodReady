@@ -1,9 +1,10 @@
 use crate::error::AppError;
+use crate::media::analysis::AudioMeasurements;
+use crate::media::binaries::ffprobe_cmd;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Command;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum MediaFormat {
     WAV,
@@ -14,9 +15,9 @@ pub enum MediaFormat {
     UNKNOWN,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct AudioMeasurements {
+pub struct MediaInspection {
     pub duration_seconds: f64,
     pub sample_rate: u32,
     pub channels: u32,
@@ -24,14 +25,15 @@ pub struct AudioMeasurements {
     pub file_size_bytes: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaSource {
     pub path: String,
     pub filename: String,
     pub format: MediaFormat,
     pub codec: String,
-    pub measurements: AudioMeasurements,
+    pub inspection: MediaInspection,
+    pub measurements: Option<AudioMeasurements>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -67,7 +69,7 @@ pub fn inspect_media<P: AsRef<Path>>(path: P) -> Result<MediaSource, AppError> {
         .to_string_lossy()
         .to_string();
 
-    let output = Command::new("ffprobe")
+    let output = ffprobe_cmd()
         .args([
             "-v",
             "quiet",
@@ -155,13 +157,14 @@ pub fn inspect_media<P: AsRef<Path>>(path: P) -> Result<MediaSource, AppError> {
         filename,
         format: media_format,
         codec: audio_stream.codec_name.clone().unwrap_or_default(),
-        measurements: AudioMeasurements {
+        inspection: MediaInspection {
             duration_seconds,
             sample_rate,
             channels,
             bitrate,
             file_size_bytes,
         },
+        measurements: None,
     })
 }
 

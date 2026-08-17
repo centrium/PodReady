@@ -7,6 +7,7 @@ import { Report } from "./components/Report";
 function App() {
   const [media, setMedia] = useState<MediaSource | null>(null);
   const [loadingFile, setLoadingFile] = useState<string | null>(null);
+  const [isAnalysing, setIsAnalysing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleFileDropped = async (path: string) => {
@@ -16,15 +17,28 @@ function App() {
     setLoadingFile(filename);
     setError(null);
     setMedia(null);
+    setIsAnalysing(false);
 
     try {
-      const result = await invoke<MediaSource>("inspect_media_cmd", { path });
-      setMedia(result);
+      // Step 1: Inspect media properties via ffprobe
+      const inspected = await invoke<MediaSource>("inspect_media_cmd", { path });
+      setMedia(inspected);
+      setLoadingFile(null);
+
+      // Step 2: Analyse audio measurements via ffmpeg (non-blocking)
+      setIsAnalysing(true);
+      const measurements = await invoke<any>("analyse_audio_cmd", {
+        path,
+        durationSeconds: inspected.inspection.durationSeconds,
+      });
+
+      setMedia((prev) => (prev ? { ...prev, measurements } : null));
     } catch (err: any) {
       console.error(err);
       setError(err.message || "An unexpected error occurred.");
     } finally {
       setLoadingFile(null);
+      setIsAnalysing(false);
     }
   };
 
@@ -39,7 +53,7 @@ function App() {
         </div>
       )}
 
-      {media && <Report media={media} />}
+      {media && <Report media={media} isAnalysing={isAnalysing} />}
 
       {error && (
         <div className="mt-8 p-6 max-w-md w-full bg-red-50 border border-red-200 rounded-xl">
