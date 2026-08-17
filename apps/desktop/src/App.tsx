@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { MediaSource } from "@podready/domain";
+import type { MediaSource, AudioMeasurements, Assessment } from "@podready/domain";
 import { Dropzone } from "./components/Dropzone";
 import { Report } from "./components/Report";
 
@@ -13,7 +13,7 @@ function App() {
   const handleFileDropped = async (path: string) => {
     // Extract filename from path for loading state
     const filename = path.split(/[/\\]/).pop() || path;
-    
+
     setLoadingFile(filename);
     setError(null);
     setMedia(null);
@@ -22,17 +22,34 @@ function App() {
     try {
       // Step 1: Inspect media properties via ffprobe
       const inspected = await invoke<MediaSource>("inspect_media_cmd", { path });
-      setMedia(inspected);
+
+      // Run initial file inspection assessment
+      const initialAssessment = await invoke<Assessment>("assess_media_cmd", {
+        inspection: inspected.inspection,
+        measurements: null,
+        format: inspected.format,
+        codec: inspected.codec,
+      });
+
+      setMedia({ ...inspected, assessment: initialAssessment });
       setLoadingFile(null);
 
       // Step 2: Analyse audio measurements via ffmpeg (non-blocking)
       setIsAnalysing(true);
-      const measurements = await invoke<any>("analyse_audio_cmd", {
+      const measurements = await invoke<AudioMeasurements>("analyse_audio_cmd", {
         path,
         durationSeconds: inspected.inspection.durationSeconds,
       });
 
-      setMedia((prev) => (prev ? { ...prev, measurements } : null));
+      // Step 3: Run comprehensive audio assessment
+      const assessment = await invoke<Assessment>("assess_media_cmd", {
+        inspection: inspected.inspection,
+        measurements,
+        format: inspected.format,
+        codec: inspected.codec,
+      });
+
+      setMedia((prev) => (prev ? { ...prev, measurements, assessment } : null));
     } catch (err: any) {
       console.error(err);
       setError(err.message || "An unexpected error occurred.");

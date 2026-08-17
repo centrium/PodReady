@@ -1,3 +1,4 @@
+use crate::assessment::Assessment;
 use crate::error::AppError;
 use crate::media::analysis::AudioMeasurements;
 use crate::media::binaries::ffprobe_cmd;
@@ -34,6 +35,7 @@ pub struct MediaSource {
     pub codec: String,
     pub inspection: MediaInspection,
     pub measurements: Option<AudioMeasurements>,
+    pub assessment: Option<Assessment>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -165,6 +167,7 @@ pub fn inspect_media<P: AsRef<Path>>(path: P) -> Result<MediaSource, AppError> {
             file_size_bytes,
         },
         measurements: None,
+        assessment: None,
     })
 }
 
