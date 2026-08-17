@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { MediaSource, AudioMeasurements, Assessment, FixPlan } from "@podready/domain";
+import type {
+  MediaSource,
+  AudioMeasurements,
+  Assessment,
+  FixPlan,
+  ProcessAudioResponse,
+} from "@podready/domain";
 import { Dropzone } from "./components/Dropzone";
 import { Report } from "./components/Report";
 
@@ -8,6 +14,8 @@ function App() {
   const [media, setMedia] = useState<MediaSource | null>(null);
   const [loadingFile, setLoadingFile] = useState<string | null>(null);
   const [isAnalysing, setIsAnalysing] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingResponse, setProcessingResponse] = useState<ProcessAudioResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleFileDropped = async (path: string) => {
@@ -18,6 +26,8 @@ function App() {
     setError(null);
     setMedia(null);
     setIsAnalysing(false);
+    setIsProcessing(false);
+    setProcessingResponse(null);
 
     try {
       // Step 1: Inspect media properties via ffprobe
@@ -68,6 +78,27 @@ function App() {
     }
   };
 
+  const handleProcessAudio = async () => {
+    if (!media || !media.fixPlan) return;
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      const response = await invoke<ProcessAudioResponse>("process_audio_cmd", {
+        sourcePath: media.path,
+        plan: media.fixPlan,
+        beforeMeasurements: media.measurements || null,
+        beforeAssessment: media.assessment || null,
+      });
+      setProcessingResponse(response);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Audio processing failed.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center p-8 font-sans">
       {!loadingFile && !media && <Dropzone onFileDropped={handleFileDropped} />}
@@ -79,7 +110,15 @@ function App() {
         </div>
       )}
 
-      {media && <Report media={media} isAnalysing={isAnalysing} />}
+      {media && (
+        <Report
+          media={media}
+          isAnalysing={isAnalysing}
+          isProcessing={isProcessing}
+          processingResponse={processingResponse}
+          onProcessAudio={handleProcessAudio}
+        />
+      )}
 
       {error && (
         <div className="mt-8 p-6 max-w-md w-full bg-red-50 border border-red-200 rounded-xl">
@@ -99,3 +138,4 @@ function App() {
 }
 
 export default App;
+

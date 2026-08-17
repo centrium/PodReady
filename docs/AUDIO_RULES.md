@@ -216,3 +216,34 @@ PodReady follows a strict separation of **Decision** (*What should happen?*) fro
 - **`MEDIUM`**: The proposed action is reasonable but involves subjective editorial judgement (reserved for future optional tools).
 - **`LOW` / Unsupported**: The action is not automated because automatic processing carries risk of altering creative intent or damaging audio fidelity.
 
+---
+
+## 8. Processing Engine Rules & Execution (Stage 4B)
+
+The Processing Engine (`media/processing.rs`) executes approved FixPlan actions non-destructively.
+
+### 8.1 Execution Pipeline & Processing Order
+1. **Validation**: The engine validates that every action is a supported audio fix (`FixActionType::LoudnessAdjustment`, `FixActionType::PeakProtection`). Any unknown or unsupported action is rejected immediately.
+2. **Workspace Isolation**: Output is written to a unique path in a temporary workspace directory (`podready_workspace/`). The source audio file remains untouched.
+3. **Pass 1 (Analysis)**:
+   - Filter: `loudnorm=I={target_lufs}:TP={ceiling_dbtp}:LRA=11:print_format=json`
+   - Purpose: Measures the source file's input integrated loudness (`input_i`), true peak (`input_tp`), loudness range (`input_lra`), threshold (`input_thresh`), and target offset.
+4. **Pass 2 (Rendering)**:
+   - Filter: `loudnorm=I={target_lufs}:TP={ceiling_dbtp}:LRA=11:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:measured_thresh={input_thresh}:offset={target_offset}:linear=true`
+   - Preserves source sampling rate (`-ar`) and audio quality while applying linear gain whenever headroom permits.
+5. **Verification**:
+   - The candidate file is independently analyzed using `analyse_audio` and `assess_media`.
+   - The output is declared successful only when objective post-processing measurements confirm compliance with the target profile.
+
+### 8.2 Supported Actions & Target Parameters
+
+| Fix Action | Filter Implementation | Target (Stereo) | Target (Mono) | Behavior |
+| :--- | :--- | :--- | :--- | :--- |
+| **Loudness Adjustment** | FFmpeg two-pass `loudnorm` | −16.0 LUFS | −19.0 LUFS | Moves programme loudness toward target with linear gain scaling. |
+| **Peak Protection** | `loudnorm` true-peak ceiling / limiter | ≤ −1.5 dBTP | ≤ −1.5 dBTP | Enforces inter-sample headroom to prevent transcoding distortion. |
+
+### 8.3 Limitations & Out-of-Scope Processing
+- **Unsupported Actions**: Automated clipping repair, silence trimming, EQ, dynamic compression presets, and voice enhancers are not automated.
+- **Transcoding / Packaging**: MP3/AAC lossy encoding, ID3 tag writing, and chapter markers are deferred to subsequent distribution packaging stages.
+
+

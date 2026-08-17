@@ -98,8 +98,38 @@ export interface FixPlan {
   totalFixes: number;
 }
 
+export interface AppliedAction {
+  actionType: FixActionType;
+  title: string;
+  success: boolean;
+  description: string;
+  fromValue?: string;
+  toValue?: string;
+}
+
+export interface ProcessingResult {
+  success: boolean;
+  outputPath: string;
+  actionsApplied: AppliedAction[];
+  reviewAdvisories: string[];
+  warnings: string[];
+  errors: string[];
+}
+
+export interface ProcessAudioResponse {
+  result: ProcessingResult;
+  candidatePath: string;
+  candidateFilename: string;
+  beforeMeasurements?: AudioMeasurements;
+  beforeAssessment?: Assessment;
+  afterMeasurements: AudioMeasurements;
+  afterAssessment: Assessment;
+}
+
+
 export interface AppError {
   message: string;
   code?: string;
 }
+
 

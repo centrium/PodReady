@@ -2,6 +2,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum AppError {
     #[error("We couldn't read the audio in this file.")]
     MediaInspectionFailed(String),
@@ -12,9 +13,16 @@ pub enum AppError {
     #[error("The media format is not supported.")]
     UnsupportedFormat,
 
+    #[error("Audio processing failed: {0}")]
+    ProcessingFailed(String),
+
+    #[error("Unsupported processing action: {0}")]
+    UnsupportedAction(String),
+
     #[error("An unexpected system error occurred.")]
     SystemError(String),
 }
+
 
 impl Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -40,6 +48,14 @@ impl Serialize for AppError {
                 message: self.to_string(),
                 code: "UNSUPPORTED_FORMAT".to_string(),
             },
+            AppError::ProcessingFailed(_) => ErrorResponse {
+                message: self.to_string(),
+                code: "PROCESSING_FAILED".to_string(),
+            },
+            AppError::UnsupportedAction(_) => ErrorResponse {
+                message: self.to_string(),
+                code: "UNSUPPORTED_ACTION".to_string(),
+            },
             AppError::SystemError(_) => ErrorResponse {
                 message: self.to_string(),
                 code: "SYSTEM_ERROR".to_string(),
@@ -49,3 +65,4 @@ impl Serialize for AppError {
         response.serialize(serializer)
     }
 }
+
