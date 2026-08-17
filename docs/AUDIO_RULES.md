@@ -112,8 +112,8 @@ True peak checks the reconstructed inter-sample ceiling to avoid digital-to-anal
 
 #### Copy & Messages:
 - `GOOD`: `"Safely within range."`
-- `ATTENTION`: `"A little high for a publishing file."`
-- `ISSUE`: `"Exceeds recommended ceiling; risk of distortion on streaming platforms."`
+- `ATTENTION`: `"Your peaks are slightly high for a publishing file."`
+- `ISSUE`: `"Peak levels exceed recommended ceiling; risk of distortion on streaming platforms."`
 - `UNKNOWN`: `"True peak could not be measured."`
 
 ---
@@ -141,7 +141,7 @@ Boundary silence evaluates leading (opening) and trailing (closing) silence inde
 | Evidence | Assessment Status | Display Value | Message | Rationale |
 | :--- | :--- | :--- | :--- | :--- |
 | `NONE` | `GOOD` | `"None detected"` | `"No obvious clipping detected."` | Waveform shows no consecutive identical flat-topped peak samples. |
-| `POSSIBLE` | `ISSUE` | `"Possible ({N} flat samples)"` | `"Possible clipping detected (waveform flat-topping found)."` | Consecutive identical peak samples detected in uncompressed PCM audio. |
+| `POSSIBLE` | `ATTENTION` | `"Possible"` or `"Possible ({N} flat samples)"` | `"Some waveform flattening was detected. Review recommended."` | Consecutive identical peak samples detected in uncompressed PCM audio; warrants review without creating panic. |
 | `UNCERTAIN` | `INFO` | `"Uncertain (lossy source)"` | `"Uncertain — cannot be determined confidently from this lossy source."` | Lossy MDCT psychoacoustic encoding alters waveforms; uncertainty is reported honestly rather than marking a false pass or false failure. |
 
 ---
@@ -157,9 +157,26 @@ Boundary silence evaluates leading (opening) and trailing (closing) silence inde
 
 ---
 
-## 5. Overall Episode Readiness
+## 5. Standards vs. PodReady Opinion
 
-The overall episode status is derived deterministically from the individual check statuses:
+PodReady maintains a clear separation between objective industry standards and subjective product opinions:
+
+### 5.1 Standards & Technical Recommendations
+- **Target Loudness**: −16 LUFS (stereo) and −19 LUFS (mono) are grounded in published broadcast & streaming distributor recommendations (Apple Podcasts, Spotify, AES TD1004).
+- **True Peak Ceilings**: The −1.5 dBTP target and −0.5 dBTP hard boundary protect against inter-sample peaks and transcoding artifacts produced during lossy distribution compression (MP3/AAC).
+- **Format & Channel Architecture**: Mono/Stereo channel topologies and 44.1/48 kHz sample rates align with global audio player decoding standards.
+
+### 5.2 PodReady Opinion & Calibrated Judgement
+- **Forgiving Loudness Tolerance**: Tolerating ±1.5 LU before triggering `ATTENTION` respects natural spoken dialogue dynamics instead of enforcing sterile brickwall normalization.
+- **Forgiving Boundary Silence**: Allowing up to 2.0s opening silence and 4.0s closing silence accommodates human breath, studio atmosphere, and music fade-outs without penalizing creators.
+- **Cautious Clipping Evaluation**: Treating flat-topping as `ATTENTION` rather than an immediate fatal `ISSUE` prevents unnecessary alarm when audio remains fully listenable.
+- **Honest Uncertainty**: Lossy files are evaluated as `INFO` (`UNCERTAIN`) for waveform clipping rather than generating false positives or false reassurance.
+
+---
+
+## 6. Overall Episode Readiness
+
+The overall episode status is derived deterministically from individual check statuses:
 
 ```text
 Are there any ISSUE checks?

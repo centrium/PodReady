@@ -224,7 +224,7 @@ pub fn assess_true_peak(true_peak: Option<f64>, profile: &PodcastProfile) -> Ass
                     label: "True peak".to_string(),
                     status: AssessmentStatus::Attention,
                     display_value: format_true_peak(Some(v)),
-                    message: "A little high for a publishing file.".to_string(),
+                    message: "Your peaks are slightly high for a publishing file.".to_string(),
                     fixable: true,
                     sparkline,
                 }
@@ -234,7 +234,7 @@ pub fn assess_true_peak(true_peak: Option<f64>, profile: &PodcastProfile) -> Ass
                     label: "True peak".to_string(),
                     status: AssessmentStatus::Issue,
                     display_value: format_true_peak(Some(v)),
-                    message: "Exceeds recommended ceiling; risk of distortion on streaming platforms.".to_string(),
+                    message: "Peak levels exceed recommended ceiling; risk of distortion on streaming platforms.".to_string(),
                     fixable: true,
                     sparkline,
                 }
@@ -317,7 +317,7 @@ pub fn assess_clipping(clipping: &ClippingAnalysis) -> AssessmentCheck {
             id: "clipping".to_string(),
             label: "Peak clipping".to_string(),
             status: AssessmentStatus::Good,
-            display_value: "No obvious clipping detected".to_string(),
+            display_value: "None detected".to_string(),
             message: "No obvious clipping detected.".to_string(),
             fixable: false,
             sparkline: None,
@@ -325,13 +325,13 @@ pub fn assess_clipping(clipping: &ClippingAnalysis) -> AssessmentCheck {
         ClippingEvidence::POSSIBLE => AssessmentCheck {
             id: "clipping".to_string(),
             label: "Peak clipping".to_string(),
-            status: AssessmentStatus::Issue,
+            status: AssessmentStatus::Attention,
             display_value: if clipping.samples_at_ceiling > 0 {
                 format!("Possible ({} flat samples)", clipping.samples_at_ceiling)
             } else {
                 "Possible".to_string()
             },
-            message: "Possible clipping detected (waveform flat-topping found).".to_string(),
+            message: "Some waveform flattening was detected. Review recommended.".to_string(),
             fixable: false,
             sparkline: None,
         },
@@ -631,12 +631,12 @@ mod tests {
         // Approaching limit (-1.4 to -0.5 dBTP)
         let check_warn = assess_true_peak(Some(-1.0), profile);
         assert_eq!(check_warn.status, AssessmentStatus::Attention);
-        assert!(check_warn.message.contains("A little high"));
+        assert!(check_warn.message.contains("peaks are slightly high"));
 
         // Over limit (> -0.5 dBTP)
         let check_over = assess_true_peak(Some(-0.2), profile);
         assert_eq!(check_over.status, AssessmentStatus::Issue);
-        assert!(check_over.message.contains("Exceeds recommended ceiling"));
+        assert!(check_over.message.contains("recommended ceiling"));
 
         // Unavailable
         let check_none = assess_true_peak(None, profile);
@@ -679,17 +679,158 @@ mod tests {
         // NONE
         let check_none = assess_clipping(&make_clipping(ClippingEvidence::NONE, 0, 0.0));
         assert_eq!(check_none.status, AssessmentStatus::Good);
+        assert_eq!(check_none.display_value, "None detected");
         assert!(check_none.message.contains("No obvious clipping detected"));
 
-        // POSSIBLE
+        // POSSIBLE -> Attention (waveform flattening detected)
         let check_poss = assess_clipping(&make_clipping(ClippingEvidence::POSSIBLE, 3200, 14.5));
-        assert_eq!(check_poss.status, AssessmentStatus::Issue);
-        assert!(check_poss.message.contains("Possible clipping detected"));
+        assert_eq!(check_poss.status, AssessmentStatus::Attention);
+        assert!(check_poss.message.contains("Some waveform flattening was detected. Review recommended."));
 
-        // UNCERTAIN
+        // UNCERTAIN -> Info (lossy source)
         let check_unc = assess_clipping(&make_clipping(ClippingEvidence::UNCERTAIN, 120, 0.0));
         assert_eq!(check_unc.status, AssessmentStatus::Info);
         assert!(check_unc.message.contains("cannot be determined confidently"));
+    }
+
+    // Calibration Fixture Set: 6 deterministic scenarios (isolated from FFmpeg)
+    #[test]
+    fn test_calibration_scenario_1_healthy_podcast() {
+        let inspection = MediaInspection {
+            duration_seconds: 300.0,
+            sample_rate: 44100,
+            channels: 2,
+            bitrate: Some(192000),
+            file_size_bytes: 7200000,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(-16.0),
+            true_peak_dbtp: Some(-2.0),
+            leading_silence_seconds: 0.5,
+            trailing_silence_seconds: 1.2,
+            clipping: make_clipping(ClippingEvidence::NONE, 0, 0.0),
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &MediaFormat::MP3, "mp3");
+        assert_eq!(assessment.overall_status, OverallStatus::Ready);
+        assert_eq!(assessment.summary, "Ready for publication");
+    }
+
+    #[test]
+    fn test_calibration_scenario_2_slightly_loud_podcast() {
+        let inspection = MediaInspection {
+            duration_seconds: 300.0,
+            sample_rate: 44100,
+            channels: 2,
+            bitrate: Some(192000),
+            file_size_bytes: 7200000,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(-14.0), // Attention range for stereo: (-14.5, -13.0]
+            true_peak_dbtp: Some(-2.0),
+            leading_silence_seconds: 0.5,
+            trailing_silence_seconds: 1.2,
+            clipping: make_clipping(ClippingEvidence::NONE, 0, 0.0),
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &MediaFormat::MP3, "mp3");
+        assert_eq!(assessment.overall_status, OverallStatus::Attention);
+        assert_eq!(assessment.summary, "1 thing needs attention");
+        let l_check = assessment.audio_checks.iter().find(|c| c.id == "loudness").unwrap();
+        assert_eq!(l_check.status, AssessmentStatus::Attention);
+        assert!(l_check.message.contains("A little louder"));
+    }
+
+    #[test]
+    fn test_calibration_scenario_3_slightly_high_true_peak() {
+        let inspection = MediaInspection {
+            duration_seconds: 300.0,
+            sample_rate: 48000,
+            channels: 2,
+            bitrate: None,
+            file_size_bytes: 28800000,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(-16.0),
+            true_peak_dbtp: Some(-1.0), // Attention range: (-1.5, -0.5] dBTP
+            leading_silence_seconds: 0.5,
+            trailing_silence_seconds: 1.2,
+            clipping: make_clipping(ClippingEvidence::NONE, 0, 0.0),
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &MediaFormat::WAV, "pcm_s16le");
+        assert_eq!(assessment.overall_status, OverallStatus::Attention);
+        assert_eq!(assessment.summary, "1 thing needs attention");
+        let tp_check = assessment.audio_checks.iter().find(|c| c.id == "true_peak").unwrap();
+        assert_eq!(tp_check.status, AssessmentStatus::Attention);
+        assert!(tp_check.message.contains("Your peaks are slightly high for a publishing file."));
+    }
+
+    #[test]
+    fn test_calibration_scenario_4_possible_clipping_evidence() {
+        let inspection = MediaInspection {
+            duration_seconds: 300.0,
+            sample_rate: 44100,
+            channels: 2,
+            bitrate: None,
+            file_size_bytes: 26460000,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(-16.0),
+            true_peak_dbtp: Some(-2.0),
+            leading_silence_seconds: 0.5,
+            trailing_silence_seconds: 1.2,
+            clipping: make_clipping(ClippingEvidence::POSSIBLE, 1200, 8.5),
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &MediaFormat::WAV, "pcm_s16le");
+        assert_eq!(assessment.overall_status, OverallStatus::Attention);
+        assert_eq!(assessment.summary, "1 thing needs attention");
+        let clip_check = assessment.audio_checks.iter().find(|c| c.id == "clipping").unwrap();
+        assert_eq!(clip_check.status, AssessmentStatus::Attention);
+        assert!(clip_check.message.contains("Some waveform flattening was detected. Review recommended."));
+    }
+
+    #[test]
+    fn test_calibration_scenario_5_confirmed_severe_issue() {
+        let inspection = MediaInspection {
+            duration_seconds: 300.0,
+            sample_rate: 44100,
+            channels: 2,
+            bitrate: None,
+            file_size_bytes: 26460000,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(-11.5), // Issue (> -13.0)
+            true_peak_dbtp: Some(0.3),            // Issue (> -0.5 dBTP)
+            leading_silence_seconds: 6.5,         // Issue (> 5.0s)
+            trailing_silence_seconds: 10.0,       // Issue (> 8.0s)
+            clipping: make_clipping(ClippingEvidence::POSSIBLE, 5000, 25.0),
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &MediaFormat::WAV, "pcm_s16le");
+        assert_eq!(assessment.overall_status, OverallStatus::NeedsAttention);
+        assert!(assessment.summary.contains("things need attention"));
+    }
+
+    #[test]
+    fn test_calibration_scenario_6_lossy_uncertain_clipping_case() {
+        let inspection = MediaInspection {
+            duration_seconds: 300.0,
+            sample_rate: 44100,
+            channels: 2,
+            bitrate: Some(128000),
+            file_size_bytes: 4800000,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(-16.0),
+            true_peak_dbtp: Some(-1.8),
+            leading_silence_seconds: 0.8,
+            trailing_silence_seconds: 1.5,
+            clipping: make_clipping(ClippingEvidence::UNCERTAIN, 180, 0.0),
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &MediaFormat::MP3, "mp3");
+        // UNCERTAIN is INFO, does not fail or trigger attention if rest of episode is healthy
+        assert_eq!(assessment.overall_status, OverallStatus::Ready);
+        assert_eq!(assessment.summary, "Ready for publication");
+        let clip_check = assessment.audio_checks.iter().find(|c| c.id == "clipping").unwrap();
+        assert_eq!(clip_check.status, AssessmentStatus::Info);
+        assert!(clip_check.message.contains("cannot be determined confidently"));
     }
 
     // Overall assessment tests
