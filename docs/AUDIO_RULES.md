@@ -189,3 +189,30 @@ Are there any ISSUE checks?
 
 - Informational checks (`INFO`) and lossy clipping uncertainty (`UNCERTAIN`) do not cause an otherwise healthy episode to fail.
 - The UI renders interpretation first ("Ready", "Attention", "Needs Attention"), supported by technical measurements and profile-driven sparklines.
+
+---
+
+## 7. FixPlan Engine Rules & Safety Guarantees (Stage 4A)
+
+PodReady follows a strict separation of **Decision** (*What should happen?*) from **Execution** (*Actually doing it*). The FixPlan engine consumes the `Assessment` model and deterministically plans corrective actions.
+
+> **Core Principle**:
+> *PodReady only automatically plans changes it can make predictably and verify.*
+
+### 7.1 FixAction Decision Matrix
+
+| Source Check | Assessment Trigger | FixAction Generated | Confidence | Modifies Audio | Safety Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Integrated Loudness** | `ATTENTION` or `ISSUE` | `Adjust loudness`<br>Target: Profile target LUFS (−16.0 / −19.0 LUFS) | `HIGH` | Yes | Predictable linear/two-pass gain adjustment that preserves relative speech dynamics and meets standard distribution targets. |
+| **True Peak** | `ATTENTION` or `ISSUE` | `Apply peak protection`<br>Ceiling: Profile ceiling (≤ −1.5 dBTP) | `HIGH` | Yes | Transparent true-peak limiting during final encoding prevents inter-sample clipping on streaming transcoders without audible distortion. |
+| **Digital Clipping** | `ATTENTION` (`POSSIBLE`) | *None (Review Advisory only)* | `LOW` *(Unsupported)* | No | Automated de-clipping algorithms can introduce synthetic artifacts or alter source timbre. Manual creator review is required. |
+| **Boundary Silence** | `ATTENTION` or `ISSUE` | *None (Unsupported in V1)* | `LOW` *(Unsupported)* | No | Trimming opening or trailing silence risks cutting intentional intro/outro music fades, room tone, or creative timing. |
+| **Sample Rate / Format** | `ATTENTION` or `ISSUE` | *None in V1 FixPlan* | `LOW` *(Unsupported)* | No | Container and sample-rate transformations are handled during publishing encoding rather than destructive source alteration. |
+| **Metadata** | Missing fields | *None in V1 FixPlan* | Future | No | Metadata enrichment is non-audio packaging and will be addressed in metadata publishing stages. |
+
+### 7.2 Confidence Model
+
+- **`HIGH`**: The proposed action is deterministic, mathematically safe, and verifiable against objective delivery standards (e.g. loudness gain, peak headroom).
+- **`MEDIUM`**: The proposed action is reasonable but involves subjective editorial judgement (reserved for future optional tools).
+- **`LOW` / Unsupported**: The action is not automated because automatic processing carries risk of altering creative intent or damaging audio fidelity.
+

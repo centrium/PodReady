@@ -1,9 +1,11 @@
 mod assessment;
 mod error;
+mod fixplan;
 mod media;
 
 use assessment::{assess_media, Assessment};
 use error::AppError;
+use fixplan::{generate_fix_plan, FixPlan};
 use media::analysis::{analyse_audio, AudioMeasurements};
 use media::ffprobe::{inspect_media, MediaFormat, MediaInspection, MediaSource};
 
@@ -34,6 +36,11 @@ fn assess_media_cmd(
     ))
 }
 
+#[tauri::command]
+fn generate_fix_plan_cmd(assessment: Assessment) -> Result<FixPlan, AppError> {
+    Ok(generate_fix_plan(&assessment))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -50,7 +57,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
         inspect_media_cmd,
         analyse_audio_cmd,
-        assess_media_cmd
+        assess_media_cmd,
+        generate_fix_plan_cmd
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { MediaSource, AudioMeasurements, Assessment } from "@podready/domain";
+import type { MediaSource, AudioMeasurements, Assessment, FixPlan } from "@podready/domain";
 import { Dropzone } from "./components/Dropzone";
 import { Report } from "./components/Report";
 
@@ -31,7 +31,11 @@ function App() {
         codec: inspected.codec,
       });
 
-      setMedia({ ...inspected, assessment: initialAssessment });
+      const initialFixPlan = await invoke<FixPlan>("generate_fix_plan_cmd", {
+        assessment: initialAssessment,
+      });
+
+      setMedia({ ...inspected, assessment: initialAssessment, fixPlan: initialFixPlan });
       setLoadingFile(null);
 
       // Step 2: Analyse audio measurements via ffmpeg (non-blocking)
@@ -49,7 +53,12 @@ function App() {
         codec: inspected.codec,
       });
 
-      setMedia((prev) => (prev ? { ...prev, measurements, assessment } : null));
+      // Step 4: Generate deterministic FixPlan
+      const fixPlan = await invoke<FixPlan>("generate_fix_plan_cmd", {
+        assessment,
+      });
+
+      setMedia((prev) => (prev ? { ...prev, measurements, assessment, fixPlan } : null));
     } catch (err: any) {
       console.error(err);
       setError(err.message || "An unexpected error occurred.");

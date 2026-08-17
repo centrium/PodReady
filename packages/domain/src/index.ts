@@ -70,9 +70,36 @@ export interface MediaSource {
   inspection: MediaInspection;
   measurements?: AudioMeasurements;
   assessment?: Assessment;
+  fixPlan?: FixPlan;
+}
+
+export type FixConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export type FixActionType = 'LOUDNESS_ADJUSTMENT' | 'PEAK_PROTECTION';
+
+export interface FixAction {
+  id: string;
+  actionType: FixActionType;
+  sourceCheckId: string;
+  title: string;
+  description: string;
+  reason: string;
+  confidence: FixConfidence;
+  changesAudio: boolean;
+  fromValue?: string;
+  toValue?: string;
+}
+
+export interface FixPlan {
+  summary: string;
+  actions: FixAction[];
+  reviewAdvisories: string[];
+  changesAudio: boolean;
+  totalFixes: number;
 }
 
 export interface AppError {
   message: string;
   code?: string;
 }
+

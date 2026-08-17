@@ -226,6 +226,92 @@ export function Report({ media, isAnalysing }: ReportProps) {
           </div>
         )}
       </div>
+
+      {/* PODREADY FIXPLAN SECTION */}
+      {media.fixPlan && (
+        <div className="pt-2 border-t border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-bold tracking-widest text-gray-400 uppercase">
+              PodReady Plan
+            </h3>
+            <span className="text-xs font-semibold text-gray-600">
+              {media.fixPlan.summary}
+            </span>
+          </div>
+
+          {media.fixPlan.actions.length > 0 ? (
+            <div className="space-y-3">
+              {media.fixPlan.actions.map((action) => (
+                <div
+                  key={action.id}
+                  className="p-3.5 bg-indigo-50/50 border border-indigo-100/80 rounded-xl space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-gray-900">
+                      {action.title}
+                    </span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-100 text-indigo-800">
+                      {action.confidence === "HIGH" ? "Safe · High Confidence" : action.confidence}
+                    </span>
+                  </div>
+
+                  {action.fromValue && action.toValue && (
+                    <div className="flex items-center space-x-2 text-xs font-mono text-gray-700 bg-white/80 px-2.5 py-1.5 rounded-lg border border-indigo-100">
+                      <span className="text-gray-500">{action.fromValue}</span>
+                      <span className="text-indigo-400 font-bold">→</span>
+                      <span className="font-semibold text-gray-900">{action.toValue}</span>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    <strong className="text-gray-700">Why:</strong> {action.reason}
+                  </p>
+
+                  <div className="text-[11px] text-gray-500 flex items-center justify-between pt-1 border-t border-indigo-100/60">
+                    <span>Modifies audio:</span>
+                    <span className="font-semibold text-gray-700">
+                      {action.changesAudio ? "Yes" : "No"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : media.fixPlan.reviewAdvisories.length === 0 ? (
+            <div className="p-3.5 bg-emerald-50/60 border border-emerald-100 rounded-xl text-xs text-emerald-800 font-medium">
+              Your episode already meets the PodReady profile. No processing changes required.
+            </div>
+          ) : null}
+
+          {/* Review Advisories (e.g. Clipping) */}
+          {media.fixPlan.reviewAdvisories.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {media.fixPlan.reviewAdvisories.map((advisory, idx) => (
+                <div
+                  key={idx}
+                  className="p-3 bg-amber-50/70 border border-amber-200/70 rounded-xl text-xs text-amber-900 space-y-1"
+                >
+                  <span className="font-bold uppercase tracking-wider text-[10px] text-amber-800 block">
+                    Review Recommended
+                  </span>
+                  <p className="leading-relaxed">{advisory}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Future Action Placeholder Button */}
+          <div className="pt-4">
+            <button
+              disabled
+              className="w-full py-2.5 px-4 bg-gray-100 text-gray-400 text-xs font-bold tracking-wider rounded-xl cursor-not-allowed uppercase border border-gray-200"
+              title="Execution will be enabled in Stage 4B"
+            >
+              {media.fixPlan.actions.length > 0 ? "Make PodReady (Future)" : "Episode Ready"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
