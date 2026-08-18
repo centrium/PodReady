@@ -3,9 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ShowWithEpisodes,
   CatalogueEpisode,
+  ShowBaseline,
 } from "@podready/domain";
 import { formatAudioDuration } from "@podready/domain";
 import { CatalogueEpisodeModal } from "./CatalogueEpisodeModal";
+import { ShowBaselineSection } from "./ShowBaselineSection";
 
 interface ShowDetailProps {
   showId: string;
@@ -15,7 +17,7 @@ interface ShowDetailProps {
 }
 
 type SortField = "ANALYSED_AT" | "FILENAME" | "DURATION" | "LOUDNESS" | "TRUE_PEAK" | "STATUS";
-type FilterStatus = "ALL" | "READY" | "ATTENTION" | "NEEDS_ATTENTION" | "CHANGED" | "MISSING";
+type FilterStatus = "ALL" | "READY" | "ATTENTION" | "NEEDS_ATTENTION" | "UNKNOWN" | "CHANGED" | "MISSING";
 
 export function ShowDetail({
   showId,
@@ -24,6 +26,7 @@ export function ShowDetail({
   onShowDeleted,
 }: ShowDetailProps) {
   const [data, setData] = useState<ShowWithEpisodes | null>(null);
+  const [baseline, setBaseline] = useState<ShowBaseline | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,8 +52,12 @@ export function ShowDetail({
     setIsLoading(true);
     setError(null);
     try {
-      const res = await invoke<ShowWithEpisodes>("get_show_cmd", { id: showId });
+      const [res, baselineRes] = await Promise.all([
+        invoke<ShowWithEpisodes>("get_show_cmd", { id: showId }),
+        invoke<ShowBaseline>("get_show_baseline_cmd", { id: showId }),
+      ]);
       setData(res);
+      setBaseline(baselineRes);
       setEditName(res.show.name);
       setEditDescription(res.show.description || "");
     } catch (err: any) {
@@ -185,6 +192,7 @@ export function ShowDetail({
       if (filter === "ALL") return true;
       if (filter === "MISSING") return ep.sourceAvailability === "MISSING";
       if (filter === "CHANGED") return ep.sourceAvailability === "CHANGED";
+      if (filter === "UNKNOWN") return !["READY", "ATTENTION", "NEEDS_ATTENTION"].includes(ep.overallAssessmentStatus);
       return ep.overallAssessmentStatus === filter;
     });
   }, [data, filter]);
@@ -258,6 +266,9 @@ export function ShowDetail({
   const readyCount = episodes.filter((e) => e.overallAssessmentStatus === "READY").length;
   const attentionCount = episodes.filter((e) => e.overallAssessmentStatus === "ATTENTION").length;
   const needsAttentionCount = episodes.filter((e) => e.overallAssessmentStatus === "NEEDS_ATTENTION").length;
+  const unknownCount = episodes.filter(
+    (e) => !["READY", "ATTENTION", "NEEDS_ATTENTION"].includes(e.overallAssessmentStatus)
+  ).length;
   const changedCount = episodes.filter((e) => e.sourceAvailability === "CHANGED").length;
   const missingCount = episodes.filter((e) => e.sourceAvailability === "MISSING").length;
 
@@ -346,6 +357,9 @@ export function ShowDetail({
         </div>
       )}
 
+      {/* Show Baseline Historical Characteristics */}
+      <ShowBaselineSection baseline={baseline} />
+
       {/* KPI / Summary Filter Buttons */}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
         <div className="flex items-center space-x-1.5">
@@ -389,6 +403,18 @@ export function ShowDetail({
           >
             Needs Attention ({needsAttentionCount})
           </button>
+          {unknownCount > 0 && (
+            <button
+              onClick={() => setFilter("UNKNOWN")}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                filter === "UNKNOWN"
+                  ? "bg-gray-700 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              Unknown ({unknownCount})
+            </button>
+          )}
           {changedCount > 0 && (
             <button
               onClick={() => setFilter("CHANGED")}

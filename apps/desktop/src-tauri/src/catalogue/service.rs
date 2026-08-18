@@ -3,8 +3,10 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::assessment::engine::OverallStatus;
 use crate::assessment::Assessment;
 use crate::batch::{BatchEpisode, BatchEpisodeStatus};
+use crate::catalogue::baseline::{compute_show_baseline, ShowBaseline};
 use crate::catalogue::models::{
     AddBatchEpisodesResult, AddEpisodeOutcome, AddEpisodeStatus, CatalogueEpisode, Show,
     ShowSummary, ShowWithEpisodes, SourceAvailability,
@@ -87,6 +89,20 @@ impl CatalogueService {
         let episodes = repo.get_episodes_for_show(id)?;
 
         Ok(ShowWithEpisodes { show, episodes })
+    }
+
+    pub fn get_show_baseline(&self, id: &str) -> Result<ShowBaseline, AppError> {
+        let repo = self.repo.lock().map_err(|e| {
+            AppError::SystemError(format!("Catalogue lock error: {}", e))
+        })?;
+
+        let show = repo
+            .get_show_by_id(id)?
+            .ok_or_else(|| AppError::NotFound(format!("Show {} not found", id)))?;
+
+        let episodes = repo.get_episodes_for_show(id)?;
+
+        Ok(compute_show_baseline(&show, &episodes))
     }
 
     pub fn delete_show(&self, id: &str) -> Result<(), AppError> {
@@ -263,7 +279,11 @@ impl CatalogueService {
 
         let now = Utc::now().to_rfc3339();
         let assessment_json = serde_json::to_string(assessment).ok();
-        let overall_assessment_status = format!("{:?}", assessment.overall_status).to_uppercase();
+        let overall_assessment_status = match assessment.overall_status {
+            OverallStatus::Ready => "READY",
+            OverallStatus::Attention => "ATTENTION",
+            OverallStatus::NeedsAttention => "NEEDS_ATTENTION",
+        }.to_string();
 
         let existing = repo.get_episode_by_source_path(show_id, source_path)?;
 

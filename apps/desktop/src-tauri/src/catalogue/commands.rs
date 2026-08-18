@@ -1,5 +1,6 @@
 use tauri::State;
 use crate::batch::BatchManager;
+use crate::catalogue::baseline::ShowBaseline;
 use crate::catalogue::models::{
     AddBatchEpisodesResult, AddEpisodeOutcome, CatalogueEpisode, CreateShowInput, Show,
     ShowSummary, ShowWithEpisodes, UpdateShowInput,
@@ -21,6 +22,14 @@ pub async fn get_show_cmd(
     catalogue: State<'_, CatalogueService>,
 ) -> Result<ShowWithEpisodes, AppError> {
     catalogue.get_show(&id)
+}
+
+#[tauri::command]
+pub async fn get_show_baseline_cmd(
+    id: String,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<ShowBaseline, AppError> {
+    catalogue.get_show_baseline(&id)
 }
 
 #[tauri::command]

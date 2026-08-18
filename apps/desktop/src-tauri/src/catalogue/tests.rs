@@ -568,3 +568,680 @@ fn test_explicit_typed_columns_queryable_without_assessment_json() {
     assert!(ep.assessment_json.is_some());
 }
 
+// =========================================================================
+// STAGE 5C: SHOW BASELINE & HISTORICAL CHARACTERISTICS TESTS
+// =========================================================================
+
+use crate::catalogue::baseline::BaselineMaturity;
+
+#[test]
+fn test_baseline_maturity_model() {
+    let service = CatalogueService::new_in_memory().expect("Failed init");
+    let show = service.create_show("Maturity Show", None).expect("Create show");
+
+    // 0 episodes -> NO_DATA
+    let b0 = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(b0.maturity, BaselineMaturity::NoData);
+    assert_eq!(b0.total_episodes, 0);
+    assert_eq!(b0.eligible_episodes, 0);
+
+    // 1 episode -> EARLY
+    let m1 = create_test_media_source("/tmp/mat_ep1.wav", 600.0, -16.0, -1.5);
+    service.add_media_source_to_show(&show.id, &m1).expect("add ep 1");
+    let b1 = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(b1.maturity, BaselineMaturity::Early);
+    assert_eq!(b1.eligible_episodes, 1);
+
+    // 2 episodes -> EARLY
+    let m2 = create_test_media_source("/tmp/mat_ep2.wav", 650.0, -15.8, -1.4);
+    service.add_media_source_to_show(&show.id, &m2).expect("add ep 2");
+    let b2 = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(b2.maturity, BaselineMaturity::Early);
+    assert_eq!(b2.eligible_episodes, 2);
+
+    // 3 episodes -> DEVELOPING
+    let m3 = create_test_media_source("/tmp/mat_ep3.wav", 700.0, -16.2, -1.6);
+    service.add_media_source_to_show(&show.id, &m3).expect("add ep 3");
+    let b3 = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(b3.maturity, BaselineMaturity::Developing);
+    assert_eq!(b3.eligible_episodes, 3);
+
+    // 4 episodes -> DEVELOPING
+    let m4 = create_test_media_source("/tmp/mat_ep4.wav", 720.0, -16.1, -1.5);
+    service.add_media_source_to_show(&show.id, &m4).expect("add ep 4");
+    let b4 = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(b4.maturity, BaselineMaturity::Developing);
+    assert_eq!(b4.eligible_episodes, 4);
+
+    // 5 episodes -> ESTABLISHED
+    let m5 = create_test_media_source("/tmp/mat_ep5.wav", 800.0, -15.9, -1.3);
+    service.add_media_source_to_show(&show.id, &m5).expect("add ep 5");
+    let b5 = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(b5.maturity, BaselineMaturity::Established);
+    assert_eq!(b5.eligible_episodes, 5);
+}
+
+#[test]
+fn test_baseline_continuous_metrics_and_r7_quartiles() {
+    let service = CatalogueService::new_in_memory().expect("Failed init");
+    let show = service.create_show("Continuous Stats Show", None).expect("Create show");
+
+    // Add 5 episodes with known loudness & true peak & duration
+    // Loudness: -18.0, -16.5, -16.0, -15.5, -14.0 (sorted)
+    // True Peak: -2.5, -2.0, -1.8, -1.5, -1.0 (sorted)
+    // Duration: 100.0, 200.0, 300.0, 400.0, 500.0 (sorted)
+    let eps = [
+        ("/tmp/c_ep1.wav", 100.0, -18.0, -2.5),
+        ("/tmp/c_ep2.wav", 200.0, -16.5, -2.0),
+        ("/tmp/c_ep3.wav", 300.0, -16.0, -1.8),
+        ("/tmp/c_ep4.wav", 400.0, -15.5, -1.5),
+        ("/tmp/c_ep5.wav", 500.0, -14.0, -1.0),
+    ];
+
+    for (p, dur, lufs, tp) in eps {
+        let m = create_test_media_source(p, dur, lufs, tp);
+        service.add_media_source_to_show(&show.id, &m).expect("add ep");
+    }
+
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(baseline.eligible_episodes, 5);
+
+    // Loudness check
+    let l = baseline.loudness.expect("loudness metric");
+    assert_eq!(l.sample_count, 5);
+    assert_eq!(l.median, -16.0);
+    assert_eq!(l.q1, -16.5);
+    assert_eq!(l.q3, -15.5);
+    assert_eq!(l.min, -18.0);
+    assert_eq!(l.max, -14.0);
+
+    // True Peak check
+    let tp = baseline.true_peak.expect("true peak metric");
+    assert_eq!(tp.sample_count, 5);
+    assert_eq!(tp.median, -1.8);
+    assert_eq!(tp.q1, -2.0);
+    assert_eq!(tp.q3, -1.5);
+    assert_eq!(tp.min, -2.5);
+    assert_eq!(tp.max, -1.0);
+
+    // Duration check
+    let d = baseline.duration.expect("duration metric");
+    assert_eq!(d.sample_count, 5);
+    assert_eq!(d.median, 300.0);
+    assert_eq!(d.q1, 200.0);
+    assert_eq!(d.q3, 400.0);
+}
+
+#[test]
+fn test_baseline_categorical_modal_distribution() {
+    let service = CatalogueService::new_in_memory().expect("Failed init");
+    let show = service.create_show("Categorical Show", None).expect("Create show");
+
+    // 3 WAV episodes and 1 MP3 episode (using custom MediaSource)
+    for i in 1..=3 {
+        let path = format!("/tmp/cat_wav_{}.wav", i);
+        let m = create_test_media_source(&path, 300.0, -16.0, -1.5);
+        service.add_media_source_to_show(&show.id, &m).expect("add");
+    }
+
+    // Add 1 MP3 episode
+    let mut mp3_source = create_test_media_source("/tmp/cat_mp3_1.mp3", 300.0, -16.0, -1.5);
+    mp3_source.format = MediaFormat::MP3;
+    mp3_source.codec = "mp3".to_string();
+    service.add_media_source_to_show(&show.id, &mp3_source).expect("add mp3");
+
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    let fmt = baseline.format.expect("format metric");
+    assert_eq!(fmt.dominant_value, "WAV");
+    assert_eq!(fmt.dominant_count, 3);
+    assert_eq!(fmt.sample_count, 4);
+    assert_eq!(fmt.dominant_proportion, 0.75);
+
+    let ch = baseline.channels.expect("channels metric");
+    assert_eq!(ch.dominant_value, "Stereo");
+    assert_eq!(ch.dominant_count, 4);
+    assert_eq!(ch.sample_count, 4);
+
+    let sr = baseline.sample_rate.expect("sample rate metric");
+    assert_eq!(sr.dominant_value, "44100 Hz");
+    assert_eq!(sr.dominant_count, 4);
+}
+
+#[test]
+fn test_baseline_source_state_eligibility() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("source_state_baseline.db");
+    let repo = CatalogueRepository::open_file(&db_path).expect("open repo");
+    let service = CatalogueService::new(repo);
+
+    let show = service.create_show("Source State Baseline Show", None).expect("create show");
+
+    // File 1: On-disk file that remains unchanged -> AVAILABLE (Eligible)
+    let f1_path = dir.path().join("ep1_available.wav");
+    {
+        let mut f = File::create(&f1_path).expect("create f1");
+        f.write_all(b"RIFF....WAVEep1_bytes").expect("write");
+    }
+    let m1 = create_test_media_source(f1_path.to_str().unwrap(), 300.0, -16.0, -1.5);
+    service.add_media_source_to_show(&show.id, &m1).expect("add ep 1");
+
+    // File 2: On-disk file that gets deleted -> MISSING (Eligible)
+    let f2_path = dir.path().join("ep2_missing.wav");
+    {
+        let mut f = File::create(&f2_path).expect("create f2");
+        f.write_all(b"RIFF....WAVEep2_bytes").expect("write");
+    }
+    let m2 = create_test_media_source(f2_path.to_str().unwrap(), 400.0, -17.0, -1.8);
+    service.add_media_source_to_show(&show.id, &m2).expect("add ep 2");
+    std::fs::remove_file(&f2_path).expect("delete f2");
+
+    // File 3: On-disk file that gets modified -> CHANGED (Excluded from baseline!)
+    let f3_path = dir.path().join("ep3_changed.wav");
+    {
+        let mut f = File::create(&f3_path).expect("create f3");
+        f.write_all(b"RIFF....WAVEep3_original").expect("write");
+    }
+    let m3 = create_test_media_source(f3_path.to_str().unwrap(), 500.0, -10.0, 0.5);
+    service.add_media_source_to_show(&show.id, &m3).expect("add ep 3");
+
+    // Modify File 3
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    {
+        let mut f = File::create(&f3_path).expect("modify f3");
+        f.write_all(b"RIFF....WAVEep3_MODIFIED_DIFFERENT_SIZE_BYTES_XXXX").expect("write");
+    }
+
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(baseline.total_episodes, 3);
+    assert_eq!(baseline.eligible_episodes, 2); // ep1 (AVAILABLE) + ep2 (MISSING)
+    assert_eq!(baseline.excluded_episodes, 1); // ep3 (CHANGED)
+    assert_eq!(baseline.exclusion_summary.changed_source_count, 1);
+
+    // Baseline should reflect only ep1 (-16.0) and ep2 (-17.0), NOT ep3 (-10.0)
+    let l = baseline.loudness.expect("loudness metric");
+    assert_eq!(l.sample_count, 2);
+    assert_eq!(l.median, -16.5); // (-17.0 + -16.0)/2
+    assert_eq!(l.max, -16.0); // -10.0 is excluded!
+}
+
+#[test]
+fn test_reanalysed_changed_source_becomes_eligible() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("reanalyse_baseline.db");
+    let repo = CatalogueRepository::open_file(&db_path).expect("open repo");
+    let service = CatalogueService::new(repo);
+
+    let show = service.create_show("Reanalyse Baseline Show", None).expect("create show");
+
+    let f_path = dir.path().join("ep_reanalyse.wav");
+    {
+        let mut f = File::create(&f_path).expect("create file");
+        f.write_all(b"RIFF....WAVEep_initial").expect("write");
+    }
+    let m = create_test_media_source(f_path.to_str().unwrap(), 300.0, -16.0, -1.5);
+    service.add_media_source_to_show(&show.id, &m).expect("add initial");
+
+    // Baseline has 1 eligible episode
+    assert_eq!(service.get_show_baseline(&show.id).unwrap().eligible_episodes, 1);
+
+    // Modify file -> CHANGED -> 0 eligible episodes
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    {
+        let mut f = File::create(&f_path).expect("modify file");
+        f.write_all(b"RIFF....WAVEep_NEW_ANALYSIS_MODIFIED").expect("write");
+    }
+    let b_changed = service.get_show_baseline(&show.id).expect("get baseline changed");
+    assert_eq!(b_changed.eligible_episodes, 0);
+    assert_eq!(b_changed.excluded_episodes, 1);
+
+    // Re-analyse file and update show catalogue
+    let m_reanalysed = create_test_media_source(f_path.to_str().unwrap(), 350.0, -15.5, -1.2);
+    let outcome = service.add_media_source_to_show(&show.id, &m_reanalysed).expect("re-catalogue");
+    assert_eq!(outcome.status, AddEpisodeStatus::Updated);
+
+    // Baseline now reflects updated analysis and is AVAILABLE again
+    let b_updated = service.get_show_baseline(&show.id).expect("get baseline updated");
+    assert_eq!(b_updated.eligible_episodes, 1);
+    assert_eq!(b_updated.excluded_episodes, 0);
+    assert_eq!(b_updated.loudness.unwrap().median, -15.5);
+    assert_eq!(b_updated.duration.unwrap().median, 350.0);
+}
+
+#[test]
+fn test_adding_and_removing_episode_changes_baseline() {
+    let service = CatalogueService::new_in_memory().expect("Failed init");
+    let show = service.create_show("Add Remove Show", None).expect("Create show");
+
+    let m1 = create_test_media_source("/tmp/ar_ep1.wav", 300.0, -16.0, -1.5);
+    let _out1 = service.add_media_source_to_show(&show.id, &m1).expect("add 1");
+
+    let b1 = service.get_show_baseline(&show.id).expect("baseline 1");
+    assert_eq!(b1.eligible_episodes, 1);
+    assert_eq!(b1.loudness.unwrap().median, -16.0);
+
+    let m2 = create_test_media_source("/tmp/ar_ep2.wav", 400.0, -14.0, -1.0);
+    let out2 = service.add_media_source_to_show(&show.id, &m2).expect("add 2");
+
+    let b2 = service.get_show_baseline(&show.id).expect("baseline 2");
+    assert_eq!(b2.eligible_episodes, 2);
+    assert_eq!(b2.loudness.unwrap().median, -15.0); // (-16 + -14)/2
+
+    // Delete episode 2 -> baseline recalculates back to 1 episode
+    service.delete_episode(&out2.episode_id).expect("delete ep 2");
+    let b3 = service.get_show_baseline(&show.id).expect("baseline 3");
+    assert_eq!(b3.eligible_episodes, 1);
+    assert_eq!(b3.loudness.unwrap().median, -16.0);
+}
+
+#[test]
+fn test_baseline_persists_across_db_reopen() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("persist_baseline.db");
+
+    let show_id = {
+        let repo = CatalogueRepository::open_file(&db_path).expect("open repo 1");
+        let service = CatalogueService::new(repo);
+        let show = service.create_show("Persistent Show", None).expect("create show");
+        let m1 = create_test_media_source("/tmp/p_ep1.wav", 300.0, -16.2, -1.5);
+        let m2 = create_test_media_source("/tmp/p_ep2.wav", 450.0, -15.8, -1.3);
+        service.add_media_source_to_show(&show.id, &m1).expect("add 1");
+        service.add_media_source_to_show(&show.id, &m2).expect("add 2");
+        show.id
+    };
+
+    // Close and reopen database connection
+    {
+        let repo = CatalogueRepository::open_file(&db_path).expect("open repo 2");
+        let service = CatalogueService::new(repo);
+        let baseline = service.get_show_baseline(&show_id).expect("get baseline reopened");
+        assert_eq!(baseline.eligible_episodes, 2);
+        assert_eq!(baseline.loudness.unwrap().median, -16.0);
+        assert_eq!(baseline.duration.unwrap().median, 375.0);
+    }
+}
+
+#[test]
+fn test_publishing_profile_independence_from_baseline() {
+    // ARCHITECTURAL SEPARATION GUARANTEE:
+    // A Show historically averaging -13.0 LUFS reports a baseline of -13.0 LUFS.
+    // However, assessing a -13.0 LUFS episode with the Assessment Engine against
+    // standard podcast profiles (podcast-stereo-v1) MUST still flag it as ATTENTION (Loud).
+    // The baseline MUST NOT alter standard publishing profiles.
+
+    let service = CatalogueService::new_in_memory().expect("Failed init");
+    let show = service.create_show("Loud Show", None).expect("Create show");
+
+    // Add 10 historical episodes all at approx -13.0 LUFS
+    for i in 1..=10 {
+        let path = format!("/tmp/loud_ep_{}.wav", i);
+        let m = create_test_media_source(&path, 1200.0, -13.0, -0.8);
+        service.add_media_source_to_show(&show.id, &m).expect("add loud ep");
+    }
+
+    // Baseline truthfully reports historical typical loudness ≈ -13.0 LUFS
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(baseline.maturity, BaselineMaturity::Established);
+    assert_eq!(baseline.eligible_episodes, 10);
+    assert_eq!(baseline.loudness.unwrap().median, -13.0);
+
+    // Now assess a candidate audio file that is -13.0 LUFS using the standard Assessment Engine
+    let inspection = MediaInspection {
+        duration_seconds: 1200.0,
+        sample_rate: 44100,
+        channels: 2,
+        bitrate: Some(192000),
+        file_size_bytes: 1024 * 100,
+    };
+    let measurements = AudioMeasurements {
+        integrated_loudness_lufs: Some(-13.0),
+        true_peak_dbtp: Some(-0.8),
+        leading_silence_seconds: 0.5,
+        trailing_silence_seconds: 1.0,
+        clipping: ClippingAnalysis {
+            sample_peak_dbfs: Some(-0.5),
+            samples_at_ceiling: 0,
+            flat_factor: 0.0,
+            evidence: ClippingEvidence::NONE,
+        },
+    };
+
+    let assessment = assess_media(
+        &inspection,
+        Some(&measurements),
+        &MediaFormat::WAV,
+        "pcm_s16le",
+    );
+
+    // Assessment Engine publishing profile targets are UNCHANGED (-16 LUFS stereo)
+    // -13 LUFS is louder than -14.5 LUFS upper threshold -> triggers ATTENTION
+    let loudness_check = assessment.audio_checks.iter().find(|c| c.id == "loudness").unwrap();
+    assert_eq!(loudness_check.status, crate::assessment::engine::AssessmentStatus::Attention);
+    assert!(loudness_check.message.contains("A little louder than we'd recommend"));
+}
+
+#[test]
+fn test_realistic_calibration_fixture_12_episodes() {
+    // Deterministic synthetic calibration fixture: 12 episodes representing a plausible show history
+    let service = CatalogueService::new_in_memory().expect("Failed init");
+    let show = service.create_show("The Audio Engineering Show", Some("A synthetic podcast fixture")).expect("create show");
+
+    // Synthetic data: 12 episodes
+    let fixture_episodes = vec![
+        // (filename, duration, lufs, dbtp, format, codec, sample_rate, channels, leading_sil, trailing_sil, clipping)
+        ("ep001.wav", 1800.0, -16.2, -1.8, MediaFormat::WAV, "pcm_s16le", 44100, 2, 0.4, 1.2, ClippingEvidence::NONE),
+        ("ep002.wav", 1920.0, -16.0, -1.6, MediaFormat::WAV, "pcm_s16le", 44100, 2, 0.5, 1.5, ClippingEvidence::NONE),
+        ("ep003.mp3", 1850.0, -16.5, -1.5, MediaFormat::MP3, "mp3", 44100, 2, 0.8, 2.0, ClippingEvidence::NONE),
+        ("ep004.mp3", 2100.0, -15.8, -1.4, MediaFormat::MP3, "mp3", 44100, 2, 0.6, 1.8, ClippingEvidence::NONE),
+        ("ep005.mp3", 1750.0, -16.4, -2.0, MediaFormat::MP3, "mp3", 44100, 2, 0.3, 1.1, ClippingEvidence::NONE),
+        ("ep006.mp3", 1900.0, -16.1, -1.7, MediaFormat::MP3, "mp3", 44100, 2, 0.5, 1.4, ClippingEvidence::NONE),
+        ("ep007.mp3", 2050.0, -16.3, -1.9, MediaFormat::MP3, "mp3", 44100, 2, 0.7, 2.2, ClippingEvidence::NONE),
+        ("ep008.mp3", 1980.0, -15.9, -1.5, MediaFormat::MP3, "mp3", 44100, 2, 0.4, 1.6, ClippingEvidence::NONE),
+        ("ep009.mp3", 2200.0, -16.6, -2.1, MediaFormat::MP3, "mp3", 44100, 2, 0.9, 2.5, ClippingEvidence::POSSIBLE),
+        ("ep010.mp3", 1820.0, -16.0, -1.6, MediaFormat::MP3, "mp3", 44100, 2, 0.5, 1.3, ClippingEvidence::NONE),
+        ("ep011.mp3", 1950.0, -16.2, -1.8, MediaFormat::MP3, "mp3", 44100, 2, 0.6, 1.7, ClippingEvidence::NONE),
+        ("ep012.mp3", 2400.0, -15.7, -1.4, MediaFormat::MP3, "mp3", 44100, 2, 0.5, 1.9, ClippingEvidence::NONE),
+    ];
+
+    for ep in fixture_episodes {
+        let inspection = MediaInspection {
+            duration_seconds: ep.1,
+            sample_rate: ep.6,
+            channels: ep.7,
+            bitrate: Some(192000),
+            file_size_bytes: 1024 * 500,
+        };
+        let measurements = AudioMeasurements {
+            integrated_loudness_lufs: Some(ep.2),
+            true_peak_dbtp: Some(ep.3),
+            leading_silence_seconds: ep.8,
+            trailing_silence_seconds: ep.9,
+            clipping: ClippingAnalysis {
+                sample_peak_dbfs: Some(-1.0),
+                samples_at_ceiling: 0,
+                flat_factor: if ep.10 == ClippingEvidence::POSSIBLE { 0.1 } else { 0.0 },
+                evidence: ep.10,
+            },
+        };
+        let assessment = assess_media(&inspection, Some(&measurements), &ep.4, ep.5);
+        let ms = MediaSource {
+            path: format!("/synthetic/show/{}", ep.0),
+            filename: ep.0.to_string(),
+            format: ep.4,
+            codec: ep.5.to_string(),
+            inspection,
+            measurements: Some(measurements),
+            assessment: Some(assessment),
+        };
+        service.add_media_source_to_show(&show.id, &ms).expect("add fixture ep");
+    }
+
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(baseline.maturity, BaselineMaturity::Established);
+    assert_eq!(baseline.eligible_episodes, 12);
+    assert_eq!(baseline.total_episodes, 12);
+    assert_eq!(baseline.excluded_episodes, 0);
+
+    // Continuous metrics:
+    // Loudness sorted (12): [-16.6, -16.5, -16.4, -16.3, -16.2, -16.2, -16.1, -16.0, -16.0, -15.9, -15.8, -15.7]
+    // Median (p=0.5) -> (-16.2 + -16.1)/2 = -16.15 LUFS
+    let l = baseline.loudness.expect("loudness");
+    assert_eq!(l.sample_count, 12);
+    assert!((l.median - -16.15).abs() < 1e-4);
+    assert_eq!(l.min, -16.6);
+    assert_eq!(l.max, -15.7);
+
+    // Duration sorted (12): [1750, 1800, 1820, 1850, 1900, 1920, 1950, 1980, 2050, 2100, 2200, 2400]
+    // Median -> (1920 + 1950)/2 = 1935.0 seconds (32:15)
+    let d = baseline.duration.expect("duration");
+    assert_eq!(d.median, 1935.0);
+
+    // Categorical: Format (10 MP3, 2 WAV)
+    let fmt = baseline.format.expect("format");
+    assert_eq!(fmt.dominant_value, "MP3");
+    assert_eq!(fmt.dominant_count, 10);
+    assert_eq!(fmt.sample_count, 12);
+
+    // Sample rate: 12 of 12 44100 Hz
+    let sr = baseline.sample_rate.expect("sample rate");
+    assert_eq!(sr.dominant_value, "44100 Hz");
+    assert_eq!(sr.dominant_count, 12);
+
+    // Channels: 12 of 12 Stereo
+    let ch = baseline.channels.expect("channels");
+    assert_eq!(ch.dominant_value, "Stereo");
+    assert_eq!(ch.dominant_count, 12);
+
+    // Clipping: 11 none, 1 possible
+    assert_eq!(baseline.clipping.none_count, 11);
+    assert_eq!(baseline.clipping.possible_count, 1);
+    assert_eq!(baseline.clipping.total_checked, 12);
+
+    // Historical points ordered chronologically
+    assert_eq!(baseline.loudness_history.len(), 12);
+    assert_eq!(baseline.true_peak_history.len(), 12);
+}
+
+#[test]
+fn test_status_count_invariant_and_needs_attention_normalization() {
+    let repo = CatalogueRepository::open_in_memory().expect("open repo");
+    let service = CatalogueService::new(repo);
+
+    let show = service.create_show("Invariant Show", None).expect("create show");
+
+    // Episode 1: Healthy -> READY
+    let m1 = create_test_media_source("/tmp/ep1.wav", 100.0, -16.0, -2.0);
+    service.add_media_source_to_show(&show.id, &m1).expect("add ep 1");
+
+    // Episode 2: Slightly loud -> ATTENTION
+    let m2 = create_test_media_source("/tmp/ep2.wav", 100.0, -14.0, -2.0);
+    service.add_media_source_to_show(&show.id, &m2).expect("add ep 2");
+
+    // Episode 3: Very loud & hot peak -> NEEDS_ATTENTION
+    let m3 = create_test_media_source("/tmp/ep3.wav", 100.0, -12.0, 0.5);
+    service.add_media_source_to_show(&show.id, &m3).expect("add ep 3");
+
+    let show_data = service.get_show(&show.id).expect("get show data");
+    let episodes = show_data.episodes;
+
+    assert_eq!(episodes.len(), 3);
+
+    let ready_count = episodes.iter().filter(|e| e.overall_assessment_status == "READY").count();
+    let attention_count = episodes.iter().filter(|e| e.overall_assessment_status == "ATTENTION").count();
+    let needs_attention_count = episodes.iter().filter(|e| e.overall_assessment_status == "NEEDS_ATTENTION").count();
+    let unknown_count = episodes.iter().filter(|e| !["READY", "ATTENTION", "NEEDS_ATTENTION"].contains(&e.overall_assessment_status.as_str())).count();
+
+    assert_eq!(ready_count, 1);
+    assert_eq!(attention_count, 1);
+    assert_eq!(needs_attention_count, 1);
+    assert_eq!(unknown_count, 0);
+
+    // INVARIANT: sum of status counts MUST equal total catalogued episodes
+    assert_eq!(ready_count + attention_count + needs_attention_count + unknown_count, episodes.len());
+}
+
+#[test]
+fn test_zero_value_measurements_survive_persistence_and_baseline() {
+    let repo = CatalogueRepository::open_in_memory().expect("open repo");
+    let service = CatalogueService::new(repo);
+
+    let show = service.create_show("Zero Value Show", None).expect("create show");
+
+    // Create an episode with exactly 0.0 dBTP true peak and 0.0s silence boundaries
+    let mut m = create_test_media_source("/tmp/zero_peak.wav", 120.0, -16.0, 0.0);
+    if let Some(ref mut meas) = m.measurements {
+        meas.true_peak_dbtp = Some(0.0);
+        meas.leading_silence_seconds = 0.0;
+        meas.trailing_silence_seconds = 0.0;
+    }
+
+    service.add_media_source_to_show(&show.id, &m).expect("add episode");
+
+    let show_data = service.get_show(&show.id).expect("get show data");
+    let ep = &show_data.episodes[0];
+
+    // Verify 0.0 is preserved as Some(0.0) / 0.0, NOT None or missing
+    assert_eq!(ep.true_peak_dbtp, Some(0.0));
+    assert_eq!(ep.leading_silence_seconds, 0.0);
+    assert_eq!(ep.trailing_silence_seconds, 0.0);
+
+    // Verify baseline includes 0.0 in statistics
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    let tp = baseline.true_peak.expect("true peak metric");
+    assert_eq!(tp.sample_count, 1);
+    assert_eq!(tp.median, 0.0);
+    assert_eq!(tp.min, 0.0);
+    assert_eq!(tp.max, 0.0);
+
+    let ls = baseline.leading_silence.expect("leading silence");
+    assert_eq!(ls.median, 0.0);
+}
+
+#[test]
+fn test_unknown_assessment_with_valid_measurements_participates_in_baseline() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = dir.path().join("unknown_assessment.db");
+    let repo = CatalogueRepository::open_file(&db_path).expect("open repo");
+    let service = CatalogueService::new(repo);
+
+    let show = service.create_show("Unknown Assessment Show", None).expect("create show");
+
+    // Insert an episode that has valid measurements
+    let m = create_test_media_source("/tmp/ep_unknown.wav", 150.0, -18.0, -1.5);
+    service.add_media_source_to_show(&show.id, &m).expect("add ep");
+
+    // Directly mutate status to "UNKNOWN" in SQLite to simulate custom/legacy import
+    {
+        let conn = rusqlite::Connection::open(&db_path).expect("open conn");
+        conn.execute("UPDATE episodes SET overall_assessment_status = 'UNKNOWN' WHERE show_id = ?1", rusqlite::params![show.id]).expect("update");
+    }
+
+    let show_data = service.get_show(&show.id).expect("get show");
+    assert_eq!(show_data.episodes[0].overall_assessment_status, "UNKNOWN");
+
+    // Baseline calculation must STILL include the valid acoustic measurements
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(baseline.eligible_episodes, 1);
+    assert_eq!(baseline.maturity, BaselineMaturity::Early);
+    let l = baseline.loudness.expect("loudness metric");
+    assert_eq!(l.median, -18.0);
+    assert_eq!(l.sample_count, 1);
+}
+
+#[test]
+fn test_synthetic_four_episode_ubercast_calibration_scenario() {
+    let repo = CatalogueRepository::open_in_memory().expect("open repo");
+    let service = CatalogueService::new(repo);
+
+    let show = service.create_show("The UberCast", Some("Calibration show")).expect("create show");
+
+    // Episode A: 79s, -23.0 LUFS, 0.0 dBTP, MP3, 44100Hz, Stereo, 1 possible clipping
+    // (-23.0 LUFS is < -20.0 (Issue) and 0.0 dBTP is > -0.5 (Issue) -> NeedsAttention)
+    let mut m_a = create_test_media_source("/tmp/epA.mp3", 79.0, -23.0, 0.0);
+    m_a.format = MediaFormat::MP3;
+    m_a.codec = "mp3".to_string();
+    if let Some(ref mut meas) = m_a.measurements {
+        meas.clipping.evidence = ClippingEvidence::POSSIBLE;
+        meas.clipping.samples_at_ceiling = 10;
+    }
+    service.add_media_source_to_show(&show.id, &m_a).expect("add A");
+
+    // Episode B: 31s, -14.2 LUFS, -1.9 dBTP, MP3, 44100Hz, Stereo, no clipping
+    // (-14.2 LUFS is > -15.0 (Attention) -> Attention)
+    let mut m_b = create_test_media_source("/tmp/epB.mp3", 31.0, -14.2, -1.9);
+    m_b.format = MediaFormat::MP3;
+    m_b.codec = "mp3".to_string();
+    service.add_media_source_to_show(&show.id, &m_b).expect("add B");
+
+    // Episode C: 44s, -16.6 LUFS, -4.2 dBTP, MP3, 44100Hz, Stereo, no clipping
+    // (-16.6 LUFS within [-17, -15], -4.2 dBTP <= -1.5 -> Ready)
+    let mut m_c = create_test_media_source("/tmp/epC.mp3", 44.0, -16.6, -4.2);
+    m_c.format = MediaFormat::MP3;
+    m_c.codec = "mp3".to_string();
+    service.add_media_source_to_show(&show.id, &m_c).expect("add C");
+
+    // Episode D: 85s, -15.4 LUFS, -1.0 dBTP, WAV, 44100Hz, Stereo, no clipping
+    // (-1.0 dBTP is > -1.5 dBTP (Attention) -> Attention)
+    let mut m_d = create_test_media_source("/tmp/epD.wav", 85.0, -15.4, -1.0);
+    m_d.format = MediaFormat::WAV;
+    m_d.codec = "pcm_s16le".to_string();
+    service.add_media_source_to_show(&show.id, &m_d).expect("add D");
+
+    // 1. Verify Status Counts and Invariant
+    let show_data = service.get_show(&show.id).expect("get data");
+    let episodes = &show_data.episodes;
+    assert_eq!(episodes.len(), 4);
+
+    let ep_a = episodes.iter().find(|e| e.filename == "epA.mp3").unwrap();
+    let ep_b = episodes.iter().find(|e| e.filename == "epB.mp3").unwrap();
+    let ep_c = episodes.iter().find(|e| e.filename == "epC.mp3").unwrap();
+    let ep_d = episodes.iter().find(|e| e.filename == "epD.wav").unwrap();
+
+    assert_eq!(ep_a.overall_assessment_status, "NEEDS_ATTENTION");
+    assert_eq!(ep_b.overall_assessment_status, "ATTENTION");
+    assert_eq!(ep_c.overall_assessment_status, "READY");
+    assert_eq!(ep_d.overall_assessment_status, "ATTENTION");
+
+    let ready_count = episodes.iter().filter(|e| e.overall_assessment_status == "READY").count();
+    let attention_count = episodes.iter().filter(|e| e.overall_assessment_status == "ATTENTION").count();
+    let needs_attention_count = episodes.iter().filter(|e| e.overall_assessment_status == "NEEDS_ATTENTION").count();
+    let unknown_count = episodes.iter().filter(|e| !["READY", "ATTENTION", "NEEDS_ATTENTION"].contains(&e.overall_assessment_status.as_str())).count();
+
+    assert_eq!(ready_count, 1);
+    assert_eq!(attention_count, 2);
+    assert_eq!(needs_attention_count, 1);
+    assert_eq!(unknown_count, 0);
+
+    // Sum invariant: All (4) = Ready (1) + Attention (2) + Needs Attention (1) + Unknown (0)
+    assert_eq!(ready_count + attention_count + needs_attention_count + unknown_count, 4);
+
+    // 2. Verify Baseline Calculations for 4 episodes (Developing)
+    let baseline = service.get_show_baseline(&show.id).expect("get baseline");
+    assert_eq!(baseline.maturity, BaselineMaturity::Developing);
+    assert_eq!(baseline.eligible_episodes, 4);
+
+    // Loudness: sorted [-23.0, -16.6, -15.4, -14.2]
+    // Median: (-16.6 + -15.4) / 2 = -16.0 LUFS
+    // Q1 (Method 7, h = 3 * 0.25 = 0.75): -23.0 + 0.75 * 6.4 = -18.2 LUFS
+    // Q3 (Method 7, h = 3 * 0.75 = 2.25): -15.4 + 0.25 * 1.2 = -15.1 LUFS
+    let l = baseline.loudness.expect("loudness");
+    assert!((l.median - -16.0).abs() < 1e-4);
+    assert!((l.q1 - -18.2).abs() < 1e-4);
+    assert!((l.q3 - -15.1).abs() < 1e-4);
+
+    // True Peak: sorted [-4.2, -1.9, -1.0, 0.0]
+    // Median: (-1.9 + -1.0) / 2 = -1.45 dBTP
+    // Q1: -4.2 + 0.75 * 2.3 = -2.475 dBTP
+    // Q3: -1.0 + 0.25 * 1.0 = -0.75 dBTP
+    let tp = baseline.true_peak.expect("true peak");
+    assert!((tp.median - -1.45).abs() < 1e-4);
+    assert!((tp.q1 - -2.475).abs() < 1e-4);
+    assert!((tp.q3 - -0.75).abs() < 1e-4);
+
+    // Duration: sorted [31, 44, 79, 85]
+    // Median: (44 + 79) / 2 = 61.5s
+    // Q1: 31 + 0.75 * 13 = 40.75s
+    // Q3: 79 + 0.25 * 6 = 80.5s
+    let dur = baseline.duration.expect("duration");
+    assert!((dur.median - 61.5).abs() < 1e-4);
+    assert!((dur.q1 - 40.75).abs() < 1e-4);
+    assert!((dur.q3 - 80.5).abs() < 1e-4);
+
+    // Delivery characteristics:
+    // Format: 3 MP3, 1 WAV -> Dominant MP3 (3 of 4 episodes · 75%)
+    let fmt = baseline.format.expect("format");
+    assert_eq!(fmt.dominant_value, "MP3");
+    assert_eq!(fmt.dominant_count, 3);
+    assert_eq!(fmt.sample_count, 4);
+
+    // Channels: 4 Stereo -> Dominant Stereo (4 of 4 episodes)
+    let ch = baseline.channels.expect("channels");
+    assert_eq!(ch.dominant_value, "Stereo");
+    assert_eq!(ch.dominant_count, 4);
+    assert_eq!(ch.sample_count, 4);
+
+    // Clipping: 3 none, 1 possible
+    assert_eq!(baseline.clipping.none_count, 3);
+    assert_eq!(baseline.clipping.possible_count, 1);
+    assert_eq!(baseline.clipping.total_checked, 4);
+}
+

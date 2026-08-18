@@ -53,6 +53,15 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_episodes_show_source ON episodes(show_id, source_path);
         "#,
     },
+    Migration {
+        version: 2,
+        description: "002_normalize_overall_assessment_status",
+        sql: r#"
+        UPDATE episodes
+        SET overall_assessment_status = 'NEEDS_ATTENTION'
+        WHERE overall_assessment_status = 'NEEDSATTENTION';
+        "#,
+    },
 ];
 
 pub fn run_migrations(conn: &mut Connection) -> Result<(), AppError> {

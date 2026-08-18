@@ -367,4 +367,112 @@ export interface UpdateShowInput {
   description?: string;
 }
 
+// Stage 5C: Show Baseline & Historical Characteristics
+
+export type BaselineMaturity = 'NO_DATA' | 'EARLY' | 'DEVELOPING' | 'ESTABLISHED';
+
+export interface ContinuousBaselineMetric {
+  id: string;
+  label: string;
+  unit: string;
+  sampleCount: number;
+  median: number;
+  q1: number;
+  q3: number;
+  min: number;
+  max: number;
+}
+
+export interface CategoricalDistributionItem {
+  value: string;
+  count: number;
+  proportion: number;
+}
+
+export interface CategoricalBaselineMetric {
+  id: string;
+  label: string;
+  sampleCount: number;
+  dominantValue: string;
+  dominantCount: number;
+  dominantProportion: number;
+  distribution: CategoricalDistributionItem[];
+}
+
+export interface BaselineExclusionSummary {
+  changedSourceCount: number;
+  missingMeasurementCount: number;
+}
+
+export interface ClippingBaselineSummary {
+  totalChecked: number;
+  noneCount: number;
+  possibleCount: number;
+  uncertainCount: number;
+}
+
+export interface HistoricalMetricPoint {
+  episodeId: string;
+  filename: string;
+  analysedAt: string;
+  value: number;
+}
+
+export interface ShowBaseline {
+  showId: string;
+  showName: string;
+  maturity: BaselineMaturity;
+  totalEpisodes: number;
+  eligibleEpisodes: number;
+  excludedEpisodes: number;
+  exclusionSummary: BaselineExclusionSummary;
+  generatedAt: string;
+  loudness?: ContinuousBaselineMetric | null;
+  truePeak?: ContinuousBaselineMetric | null;
+  duration?: ContinuousBaselineMetric | null;
+  leadingSilence?: ContinuousBaselineMetric | null;
+  trailingSilence?: ContinuousBaselineMetric | null;
+  bitrate?: ContinuousBaselineMetric | null;
+  format?: CategoricalBaselineMetric | null;
+  sampleRate?: CategoricalBaselineMetric | null;
+  channels?: CategoricalBaselineMetric | null;
+  codec?: CategoricalBaselineMetric | null;
+  clipping: ClippingBaselineSummary;
+  loudnessHistory: HistoricalMetricPoint[];
+  truePeakHistory: HistoricalMetricPoint[];
+}
+
+export function formatBaselineLoudness(metric?: ContinuousBaselineMetric | null): { typical: string; range: string } {
+  if (!metric) {
+    return { typical: '—', range: '—' };
+  }
+  const sign = metric.median < 0 ? '−' : '';
+  const typical = `${sign}${Math.abs(metric.median).toFixed(1)} LUFS`;
+  const q1Sign = metric.q1 < 0 ? '−' : '';
+  const q3Sign = metric.q3 < 0 ? '−' : '';
+  const range = `${q1Sign}${Math.abs(metric.q1).toFixed(1)} → ${q3Sign}${Math.abs(metric.q3).toFixed(1)} LUFS`;
+  return { typical, range };
+}
+
+export function formatBaselinePeak(metric?: ContinuousBaselineMetric | null): { typical: string; range: string } {
+  if (!metric) {
+    return { typical: '—', range: '—' };
+  }
+  const sign = metric.median < 0 ? '−' : '';
+  const typical = `${sign}${Math.abs(metric.median).toFixed(1)} dBTP`;
+  const q1Sign = metric.q1 < 0 ? '−' : '';
+  const q3Sign = metric.q3 < 0 ? '−' : '';
+  const range = `${q1Sign}${Math.abs(metric.q1).toFixed(1)} → ${q3Sign}${Math.abs(metric.q3).toFixed(1)} dBTP`;
+  return { typical, range };
+}
+
+export function formatBaselineDuration(metric?: ContinuousBaselineMetric | null): { typical: string; range: string } {
+  if (!metric) {
+    return { typical: '—', range: '—' };
+  }
+  const typical = formatAudioDuration(metric.median);
+  const range = `${formatAudioDuration(metric.q1)} → ${formatAudioDuration(metric.q3)}`;
+  return { typical, range };
+}
+
 

@@ -129,6 +129,20 @@ export function CatalogueEpisodeModal({
             </span>
           </div>
         );
+      default:
+        return (
+          <div className="p-3.5 bg-gray-50 border border-gray-200 rounded-xl flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-gray-400" />
+              <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                Assessment Unavailable
+              </span>
+            </div>
+            <span className="text-xs font-medium text-gray-500">
+              {summary || "No assessment record available"}
+            </span>
+          </div>
+        );
     }
   };
 

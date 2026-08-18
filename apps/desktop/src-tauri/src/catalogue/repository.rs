@@ -414,6 +414,14 @@ impl CatalogueRepository {
         };
 
 
+        let raw_status: String = row.get(16)?;
+        let overall_assessment_status = match raw_status.as_str() {
+            "NEEDSATTENTION" | "NEEDS_ATTENTION" => "NEEDS_ATTENTION".to_string(),
+            "ATTENTION" => "ATTENTION".to_string(),
+            "READY" => "READY".to_string(),
+            other => other.to_string(),
+        };
+
         Ok(CatalogueEpisode {
             id: row.get(0)?,
             show_id: row.get(1)?,
@@ -431,7 +439,7 @@ impl CatalogueRepository {
             leading_silence_seconds: row.get(13)?,
             trailing_silence_seconds: row.get(14)?,
             clipping_evidence: row.get(15)?,
-            overall_assessment_status: row.get(16)?,
+            overall_assessment_status,
             assessment_profile_id: row.get(17)?,
             assessment_profile_version: row.get(18)?,
             analysed_at: row.get(19)?,

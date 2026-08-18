@@ -136,4 +136,61 @@ SQLite Database (podready_catalogue.db in Tauri App Data Directory)
    - Catalogue operations (creating, updating, deleting Shows or Episodes) only touch SQLite.
    - Deleting a Show cascade-deletes catalogue SQLite records and NEVER modifies, renames, moves, or deletes user audio media files.
 
+### Show Baseline & Historical Characteristics (Stage 5C)
+PodReady provides descriptive historical intelligence by calculating a deterministic Show Baseline from persisted catalogue records:
+
+```text
+SQLite Catalogue (podready_catalogue.db)
+       ↓
+CatalogueRepository (typed columns & dynamic source-availability)
+       ↓
+Baseline Eligibility Filter (include AVAILABLE & MISSING, exclude CHANGED)
+       ↓
+Show Baseline Engine (pure robust statistics in Rust)
+       ↓
+ShowBaseline Domain Model
+       ↓ (Tauri IPC: get_show_baseline_cmd)
+ShowDetail UI (restrained editorial baseline & historical context)
+```
+
+1. **Strict Architectural Separation (Publishing Profile vs. Show Baseline)**:
+   - **Publishing Profile (`podcast-stereo-v1`, `podcast-mono-v1`)**: Owned strictly by the Assessment Engine. Defines objective publishing targets (e.g. Target −16 LUFS stereo, ≤ −1.5 dBTP ceiling).
+   - **Show Baseline**: Owned strictly by the Baseline Engine. Descriptively answers: *"What has this particular show historically looked/sounded like?"* (e.g. Typical loudness −16.3 LUFS, usual range −16.8 → −15.7 LUFS).
+   - **Non-Interference Guarantee**: The Show Baseline NEVER overrides, influences, or alters the Assessment Engine rules. A show that historically averages −13 LUFS will report a baseline of −13 LUFS, but evaluating a −13 LUFS episode against publishing profiles continues to report `ATTENTION (Loud)`.
+
+2. **Baseline Eligibility Rules**:
+   - `AVAILABLE` episodes: Included.
+   - `MISSING` episodes: Included (historical measurements accurately reflect the analyzed source at time of measurement).
+   - `CHANGED` episodes: Excluded from active baseline calculations (source on disk changed, so measurements may be stale).
+   - `FAILED` / `CANCELLED` analysis: Never eligible.
+   - Missing required measurements: Excluded from the affected metric only, without excluding the entire episode from other baseline metrics.
+
+3. **Maturity Model**:
+   - `NO_DATA`: 0 eligible episodes (*"No baseline yet"*)
+   - `EARLY`: 1–2 eligible episodes (*"Early baseline — based on N episodes"*)
+   - `DEVELOPING`: 3–4 eligible episodes (*"Baseline developing — based on N episodes"*)
+   - `ESTABLISHED`: 5+ eligible episodes (*"Established baseline — based on N episodes"*)
+
+4. **Statistical Methodology (Median & R-7 Quartiles)**:
+   - Descriptive continuous metrics (Loudness, True Peak, Duration, Silence Boundaries) prioritize the **Median** as the primary "Typical" value.
+   - The "Usual range" is bounded by Lower Quartile ($Q_1$) and Upper Quartile ($Q_3$).
+   - Quartiles use Hyndman-Fan Method 7 (linear interpolation of the empirical CDF: $h = (N - 1) \times p$), deterministic across odd/even counts, single values, repeated values, and negative LUFS/dBTP scales.
+
+5. **Categorical Modal Metrics**:
+   - For delivery characteristics (Format, Sample Rate, Channels, Codec), the dominant modal value is identified along with observation counts, sample counts, proportions, and complete distribution lists. Minority formats are described neutrally without judgment.
+
+6. **Zero Media Tooling Guarantee**:
+   - Computing a Show Baseline reads strictly from explicit typed SQLite columns and performs in-memory arithmetic in Rust. It NEVER invokes FFmpeg, FFprobe, Whisper, or disk file reading.
+
+7. **Stage 5D Integration Boundary**:
+   - Stage 5C preserves chronologically ordered historical series (`loudness_history`, `true_peak_history`) as the pure foundation for Stage 5D.
+   - Stage 5C contains NO episode vs. baseline comparisons, anomaly scoring, consistency ratings, or automated presets.
+
+8. **Stage 5C.1 Calibration, Status Invariants & Zero-Value Integrity**:
+   - **Assessment Status Invariant**: Every catalogued episode belongs to exactly one assessment status category (`READY`, `ATTENTION`, `NEEDS_ATTENTION`, `UNKNOWN`). The sum of status category counts strictly equals the total catalogued episodes count.
+   - **Exact String Canonicalization**: Assessment overall statuses are strictly serialized as `SCREAMING_SNAKE_CASE` (e.g. `NEEDS_ATTENTION`), normalized on read and migrated via migration 002.
+   - **Measurement Availability vs. Assessment Availability**: Baseline metric eligibility is based on the currency and validity of individual measurements, not on whether an overall publishing status could be assigned. An episode with valid acoustic measurements but unavailable assessment participates in baseline metrics.
+   - **Zero-Value Preservation**: Measurements with a valid value of `0.0` (such as `0.0 dBTP` True Peak, `0.0s` leading/trailing silence) are preserved through database insertion, retrieval, and baseline calculation, and are never coerced to null/missing/undefined.
+   - **Categorical Denominator Semantics**: Delivery characteristic denominators explicitly represent the sample count of valid observations for that specific metric.
+
 
