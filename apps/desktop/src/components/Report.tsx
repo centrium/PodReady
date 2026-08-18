@@ -18,6 +18,7 @@ interface ReportProps {
   isExporting?: boolean;
   exportResult?: PodReadyPackage | null;
   onExport?: (options: ExportOptions) => Promise<void>;
+  onAddToShow?: () => void;
 }
 
 export function Report({
@@ -29,6 +30,7 @@ export function Report({
   isExporting = false,
   exportResult = null,
   onExport,
+  onAddToShow,
 }: ReportProps) {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -148,11 +150,22 @@ export function Report({
           <span className="text-xs font-bold tracking-widest text-gray-400 uppercase">
             Episode
           </span>
-          {assessment && (
-            <span className="text-xs font-medium text-gray-400">
-              {assessment.profileName}
-            </span>
-          )}
+          <div className="flex items-center space-x-2">
+            {assessment && (
+              <span className="text-xs font-medium text-gray-400">
+                {assessment.profileName}
+              </span>
+            )}
+            {onAddToShow && assessment && !isAnalysing && (
+              <button
+                type="button"
+                onClick={onAddToShow}
+                className="px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors border border-indigo-200 shadow-2xs cursor-pointer"
+              >
+                + Add to Show
+              </button>
+            )}
+          </div>
         </div>
         <h2 className="text-xl font-bold tracking-tight text-gray-900 truncate">
           {media.filename}
@@ -161,6 +174,7 @@ export function Report({
           {formatTime(media.inspection.durationSeconds)}
         </p>
       </div>
+
 
       {/* OVERALL READINESS STATUS */}
       {assessment && (

@@ -6,12 +6,13 @@ interface BatchResultsProps {
   job: BatchAnalysisJob;
   onSelectEpisode: (episode: BatchEpisode) => void;
   onReset: () => void;
+  onAddToShow?: () => void;
 }
 
 type SortField = "IMPORT_ORDER" | "STATUS" | "FILENAME" | "LOUDNESS" | "TRUE_PEAK";
 type FilterStatus = "ALL" | "READY" | "ATTENTION" | "NEEDS_ATTENTION" | "FAILED";
 
-export function BatchResults({ job, onSelectEpisode, onReset }: BatchResultsProps) {
+export function BatchResults({ job, onSelectEpisode, onReset, onAddToShow }: BatchResultsProps) {
   const [filter, setFilter] = useState<FilterStatus>("ALL");
   const [sortField, setSortField] = useState<SortField>("IMPORT_ORDER");
   const [sortAsc, setSortAsc] = useState<boolean>(true);
@@ -144,13 +145,24 @@ export function BatchResults({ job, onSelectEpisode, onReset }: BatchResultsProp
           </p>
         </div>
 
-        <button
-          onClick={onReset}
-          className="self-start md:self-auto px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors shadow-sm"
-        >
-          Analyse More Episodes
-        </button>
+        <div className="flex items-center space-x-3 self-start md:self-auto">
+          {onAddToShow && complete > 0 && (
+            <button
+              onClick={onAddToShow}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition-colors shadow-sm cursor-pointer"
+            >
+              + Add to Show
+            </button>
+          )}
+          <button
+            onClick={onReset}
+            className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors shadow-sm"
+          >
+            Analyse More Episodes
+          </button>
+        </div>
       </div>
+
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

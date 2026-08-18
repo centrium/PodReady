@@ -29,7 +29,12 @@ tauri-plugin-opener = "2.0.0"
 log = "0.4"
 tauri-plugin-log = "2"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1.10", features = ["v4", "fast-rng"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 sha2 = "0.10"
+tempfile = "3.12"
+
 

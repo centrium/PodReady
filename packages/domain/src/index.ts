@@ -279,3 +279,92 @@ export function formatAudioDuration(seconds?: number | null): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// Stage 5B: Local Show Library & Episode Catalogue
+
+export type SourceAvailability = 'AVAILABLE' | 'MISSING' | 'CHANGED';
+
+
+export type AddEpisodeStatus = 'ADDED' | 'ALREADY_EXISTS' | 'UPDATED';
+
+export interface Show {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShowSummary {
+  id: string;
+  name: string;
+  description?: string;
+  episodeCount: number;
+  lastAnalysedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CatalogueEpisode {
+  id: string;
+  showId: string;
+  sourcePath: string;
+  filename: string;
+  fileSizeBytes: number;
+  durationSeconds: number;
+  format: MediaFormat;
+  codec: string;
+  sampleRate: number;
+  channels: number;
+  bitrate?: number;
+  integratedLoudnessLufs?: number | null;
+  truePeakDbtp?: number | null;
+  leadingSilenceSeconds: number;
+  trailingSilenceSeconds: number;
+  clippingEvidence: ClippingEvidence;
+  overallAssessmentStatus: OverallStatus;
+  assessmentProfileId: string;
+  assessmentProfileVersion: string;
+  analysedAt: string;
+  sourceModifiedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  assessmentJson?: string;
+  assessment?: Assessment;
+  sourceAvailability: SourceAvailability;
+}
+
+export interface ShowWithEpisodes {
+  show: Show;
+  episodes: CatalogueEpisode[];
+}
+
+export interface AddEpisodeOutcome {
+  episodeId: string;
+  filename: string;
+  status: AddEpisodeStatus;
+  message?: string;
+}
+
+export interface AddBatchEpisodesResult {
+  showId: string;
+  showName: string;
+  totalProcessed: number;
+  added: number;
+  updated: number;
+  alreadyExists: number;
+  skippedFailed: number;
+  outcomes: AddEpisodeOutcome[];
+}
+
+export interface CreateShowInput {
+  name: string;
+  description?: string;
+}
+
+export interface UpdateShowInput {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+

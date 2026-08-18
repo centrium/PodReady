@@ -92,3 +92,48 @@ Assemble PodReady Package ([Stem]_PodReady/)
 
 ### File Handling & Immutability Guarantee
 The original source files are strictly read-only and are never modified or overwritten.
+
+### Local Show Library & Persistent Catalogue (Stage 5B)
+PodReady provides a persistent local-first podcast catalogue powered by bundled SQLite:
+```text
+React UI (Workspace / Show Library / Show Detail / Stored Episode Inspection)
+   ↓ (Tauri IPC)
+Catalogue Commands (commands.rs)
+   ↓
+CatalogueService (service.rs)
+   ↓
+CatalogueRepository (repository.rs + rusqlite bundled)
+   ↓
+SQLite Database (podready_catalogue.db in Tauri App Data Directory)
+```
+
+1. **Storage & Migrations**:
+   - Uses `rusqlite` with `bundled` feature (zero external server/system dependency).
+   - Canonical Tauri bundle identifier: `com.podready.desktop` (defined in `tauri.conf.json`).
+   - Database lives in `app_handle.path().app_data_dir() / "podready_catalogue.db"` (e.g. `~/Library/Application Support/com.podready.desktop/podready_catalogue.db` on macOS).
+   - Versioned migrations are tracked in `schema_migrations` table and run automatically on startup.
+   - Tests execute against in-memory or hermetic temporary databases to guarantee complete isolation from user data.
+
+2. **Domain Models**:
+   - `Show`: `id`, `name`, `description`, `created_at`, `updated_at`.
+   - `CatalogueEpisode`: Complete metadata and objective measurements (`duration_seconds`, `format`, `codec`, `sample_rate`, `channels`, `bitrate`, `integrated_loudness_lufs`, `true_peak_dbtp`, `leading_silence_seconds`, `trailing_silence_seconds`, `clipping_evidence`, `overall_assessment_status`, `assessment_profile_id`, `assessment_profile_version`, `analysed_at`, `source_modified_at`, `assessment_json`).
+   - `assessment_json`: Supplemental full-fidelity data for rendering individual check items and sparklines in the UI modal without needing FFmpeg; core historical measurements remain queryable via explicit typed columns.
+
+3. **Source Identity & Duplicate Detection**:
+   - Episode identity is determined deterministically by `(show_id, source_path)`.
+   - Adding an unchanged file to the same show returns `ALREADY_EXISTS` without creating duplicate rows.
+   - `UPDATED` only stores fresh measurements produced from an analysis of the current source version on disk.
+
+4. **Source Availability & Workspace Bridge**:
+   - `source_availability` is evaluated dynamically at query time:
+     - `AVAILABLE`: Source exists on disk and its size and modification timestamp match stored catalogue facts.
+     - `MISSING`: Source file does not exist at its recorded path.
+     - `CHANGED`: Source file exists at its path but its on-disk size or modification timestamp has changed since it was catalogued.
+   - When `CHANGED` or `MISSING`, historical analysis is preserved and viewable with zero FFmpeg execution.
+   - When `AVAILABLE` or `CHANGED`, the catalogue provides a seamless bridge ("Open in Workspace" / "Re-analyse in Workspace") into the single-file pipeline.
+
+5. **Source Safety Non-Negotiable Guarantee**:
+   - Catalogue operations (creating, updating, deleting Shows or Episodes) only touch SQLite.
+   - Deleting a Show cascade-deletes catalogue SQLite records and NEVER modifies, renames, moves, or deletes user audio media files.
+
+

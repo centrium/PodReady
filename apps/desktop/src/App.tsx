@@ -12,13 +12,24 @@ import type {
   BatchAnalysisJob,
   BatchEpisode,
   BatchProgressPayload,
+  ShowSummary,
 } from "@podready/domain";
 import { Dropzone } from "./components/Dropzone";
 import { Report } from "./components/Report";
 import { BatchProgress } from "./components/BatchProgress";
 import { BatchResults } from "./components/BatchResults";
+import { ShowLibrary } from "./components/ShowLibrary";
+import { ShowDetail } from "./components/ShowDetail";
+import { AddToShowModal } from "./components/AddToShowModal";
+
+type NavigationTab = "WORKSPACE" | "SHOWS";
 
 function App() {
+  // Navigation
+  const [currentTab, setCurrentTab] = useState<NavigationTab>("WORKSPACE");
+  const [selectedShowId, setSelectedShowId] = useState<string | null>(null);
+  const [showsCount, setShowsCount] = useState<number>(0);
+
   // Single episode state
   const [media, setMedia] = useState<MediaSource | null>(null);
   const [loadingFile, setLoadingFile] = useState<string | null>(null);
@@ -35,8 +46,25 @@ function App() {
   const [isCancellingBatch, setIsCancellingBatch] = useState<boolean>(false);
   const [selectedBatchEpisode, setSelectedBatchEpisode] = useState<BatchEpisode | null>(null);
 
+  // Add to Show modal state
+  const [isAddToShowOpen, setIsAddToShowOpen] = useState<boolean>(false);
+  const [addToShowTarget, setAddToShowTarget] = useState<"SINGLE" | "BATCH">("SINGLE");
+
   const batchJobRef = useRef<BatchAnalysisJob | null>(null);
   batchJobRef.current = batchJob;
+
+  useEffect(() => {
+    loadShowsCount();
+  }, [currentTab, isAddToShowOpen]);
+
+  const loadShowsCount = async () => {
+    try {
+      const shows = await invoke<ShowSummary[]>("get_shows_cmd");
+      setShowsCount(shows.length);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     let unlistenProgress: (() => void) | undefined;
@@ -99,6 +127,7 @@ function App() {
     setProcessingResponse(null);
     setIsExporting(false);
     setExportResult(null);
+    setCurrentTab("WORKSPACE");
 
     try {
       // Step 1: Inspect media properties via ffprobe
@@ -155,6 +184,7 @@ function App() {
     setLoadingFile(null);
     setSelectedBatchEpisode(null);
     setIsCancellingBatch(false);
+    setCurrentTab("WORKSPACE");
 
     try {
       const job = await invoke<BatchAnalysisJob>("start_batch_analysis_cmd", { paths });
@@ -272,6 +302,11 @@ function App() {
     }
   };
 
+  const openAddToShowModal = (target: "SINGLE" | "BATCH") => {
+    setAddToShowTarget(target);
+    setIsAddToShowOpen(true);
+  };
+
   // Convert BatchEpisode to MediaSource for Report display
   const batchEpisodeMedia: MediaSource | null = selectedBatchEpisode
     ? {
@@ -291,99 +326,210 @@ function App() {
     : null;
 
   return (
-    <main className="min-h-screen bg-gray-50 flex items-center justify-center p-8 font-sans">
-      {/* 1. Idle state: Dropzone */}
-      {!loadingFile && !media && !batchJob && (
-        <Dropzone onFilesDropped={handleFilesDropped} />
-      )}
-
-      {/* 2. Loading single file initial inspection */}
-      {loadingFile && (
-        <div className="flex flex-col items-center justify-center space-y-4">
-          <h2 className="text-xl font-medium text-gray-900">{loadingFile}</h2>
-          <p className="text-gray-500 animate-pulse">Checking your episode…</p>
-        </div>
-      )}
-
-      {/* 3. Single episode Report */}
-      {media && !selectedBatchEpisode && (
-        <Report
-          media={media}
-          isAnalysing={isAnalysing}
-          isProcessing={isProcessing}
-          processingResponse={processingResponse}
-          onProcessAudio={handleProcessAudio}
-          isExporting={isExporting}
-          exportResult={exportResult}
-          onExport={handleExportPackage}
-        />
-      )}
-
-      {/* 4. Batch in-progress */}
-      {batchJob && isBatchRunning && !selectedBatchEpisode && (
-        <BatchProgress
-          job={batchJob}
-          onCancel={handleCancelBatch}
-          isCancelling={isCancellingBatch}
-        />
-      )}
-
-      {/* 5. Batch results completed / cancelled */}
-      {batchJob && !isBatchRunning && !selectedBatchEpisode && (
-        <BatchResults
-          job={batchJob}
-          onSelectEpisode={(ep) => setSelectedBatchEpisode(ep)}
-          onReset={handleReset}
-        />
-      )}
-
-      {/* 6. Batch single-episode drill-down view */}
-      {selectedBatchEpisode && batchEpisodeMedia && (
-        <div className="flex flex-col w-full max-w-4xl space-y-4">
-          <div className="flex items-center justify-between bg-white border border-gray-200 px-6 py-3 rounded-xl shadow-xs">
-            <button
-              onClick={() => setSelectedBatchEpisode(null)}
-              className="flex items-center text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-            >
-              <svg
-                className="w-4 h-4 mr-1.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10 19l-7-7m0 0l7-7m-7 7h18"
-                />
-              </svg>
-              Back to Batch Results
-            </button>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Batch Episode Assessment
+    <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
+      {/* App Top Navigation Bar */}
+      <header className="w-full bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-3 shadow-2xs">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2">
+              <span className="w-3 h-3 rounded-full bg-indigo-600 shadow-xs" />
+              <h1 className="text-base font-bold tracking-tight text-gray-900">
+                PodReady
+              </h1>
+            </div>
+            <span className="text-xs font-semibold text-gray-300">/</span>
+            <span className="text-xs font-medium text-gray-500">
+              {currentTab === "WORKSPACE" ? "Audio Workspace" : "Show Catalogue"}
             </span>
           </div>
 
-          <Report media={batchEpisodeMedia} isAnalysing={false} />
-        </div>
-      )}
-
-      {/* Error Modal / Banner */}
-      {error && (
-        <div className="mt-8 p-6 max-w-md w-full bg-red-50 border border-red-200 rounded-xl">
-          <p className="text-red-800 font-medium text-center mb-4">{error}</p>
-          <div className="flex justify-center">
+          <div className="flex items-center space-x-1.5 bg-gray-100 p-1 rounded-xl">
             <button
-              onClick={() => setError(null)}
-              className="px-4 py-2 bg-white text-gray-700 text-sm font-medium border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+              onClick={() => {
+                setCurrentTab("WORKSPACE");
+              }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                currentTab === "WORKSPACE"
+                  ? "bg-white text-gray-900 shadow-xs"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
             >
-              TRY AGAIN
+              Workspace
+            </button>
+            <button
+              onClick={() => {
+                setCurrentTab("SHOWS");
+              }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center space-x-1.5 ${
+                currentTab === "SHOWS"
+                  ? "bg-white text-gray-900 shadow-xs"
+                  : "text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <span>Shows</span>
+              {showsCount > 0 && (
+                <span className="px-1.5 py-0.2 text-[10px] font-bold rounded-full bg-indigo-100 text-indigo-800">
+                  {showsCount}
+                </span>
+              )}
             </button>
           </div>
         </div>
-      )}
-    </main>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="flex-1 flex items-center justify-center p-6 md:p-8">
+        {/* TAB 1: WORKSPACE */}
+        {currentTab === "WORKSPACE" && (
+          <div className="w-full flex justify-center">
+            {/* 1. Idle state: Dropzone */}
+            {!loadingFile && !media && !batchJob && (
+              <Dropzone onFilesDropped={handleFilesDropped} />
+            )}
+
+            {/* 2. Loading single file initial inspection */}
+            {loadingFile && (
+              <div className="flex flex-col items-center justify-center space-y-4">
+                <h2 className="text-xl font-medium text-gray-900">{loadingFile}</h2>
+                <p className="text-gray-500 animate-pulse">Checking your episode…</p>
+              </div>
+            )}
+
+            {/* 3. Single episode Report */}
+            {media && !selectedBatchEpisode && (
+              <div className="flex flex-col items-center space-y-4 w-full">
+                <div className="w-full max-w-lg flex justify-start">
+                  <button
+                    onClick={handleReset}
+                    className="text-xs font-semibold text-gray-500 hover:text-gray-800 flex items-center space-x-1"
+                  >
+                    <span>←</span>
+                    <span>Analyse another file</span>
+                  </button>
+                </div>
+                <Report
+                  media={media}
+                  isAnalysing={isAnalysing}
+                  isProcessing={isProcessing}
+                  processingResponse={processingResponse}
+                  onProcessAudio={handleProcessAudio}
+                  isExporting={isExporting}
+                  exportResult={exportResult}
+                  onExport={handleExportPackage}
+                  onAddToShow={() => openAddToShowModal("SINGLE")}
+                />
+              </div>
+            )}
+
+            {/* 4. Batch in-progress */}
+            {batchJob && isBatchRunning && !selectedBatchEpisode && (
+              <BatchProgress
+                job={batchJob}
+                onCancel={handleCancelBatch}
+                isCancelling={isCancellingBatch}
+              />
+            )}
+
+            {/* 5. Batch results completed / cancelled */}
+            {batchJob && !isBatchRunning && !selectedBatchEpisode && (
+              <BatchResults
+                job={batchJob}
+                onSelectEpisode={(ep) => setSelectedBatchEpisode(ep)}
+                onReset={handleReset}
+                onAddToShow={() => openAddToShowModal("BATCH")}
+              />
+            )}
+
+            {/* 6. Batch single-episode drill-down view */}
+            {selectedBatchEpisode && batchEpisodeMedia && (
+              <div className="flex flex-col w-full max-w-4xl space-y-4">
+                <div className="flex items-center justify-between bg-white border border-gray-200 px-6 py-3 rounded-xl shadow-xs">
+                  <button
+                    onClick={() => setSelectedBatchEpisode(null)}
+                    className="flex items-center text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                  >
+                    <svg
+                      className="w-4 h-4 mr-1.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                      />
+                    </svg>
+                    Back to Batch Results
+                  </button>
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Batch Episode Assessment
+                  </span>
+                </div>
+
+                <Report media={batchEpisodeMedia} isAnalysing={false} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: SHOWS LIBRARY */}
+        {currentTab === "SHOWS" && (
+          <div className="w-full flex justify-center">
+            {selectedShowId ? (
+              <ShowDetail
+                showId={selectedShowId}
+                onBack={() => setSelectedShowId(null)}
+                onOpenInWorkspace={(path) => {
+                  handleSingleFileDropped(path);
+                }}
+                onShowDeleted={() => {
+                  setSelectedShowId(null);
+                  loadShowsCount();
+                }}
+              />
+            ) : (
+              <ShowLibrary
+                onSelectShow={(id) => {
+                  setSelectedShowId(id);
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Error Modal / Banner */}
+        {error && (
+          <div className="fixed bottom-8 right-8 z-50 p-5 max-w-md w-full bg-red-50 border border-red-200 rounded-2xl shadow-lg">
+            <p className="text-red-800 text-xs font-medium mb-3">{error}</p>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setError(null)}
+                className="px-3 py-1.5 bg-white text-gray-700 text-xs font-semibold border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-2xs"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Add to Show Modal */}
+        {isAddToShowOpen && (
+          <AddToShowModal
+            isOpen={true}
+            onClose={() => setIsAddToShowOpen(false)}
+            singleMedia={addToShowTarget === "SINGLE" ? media : null}
+            batchJob={addToShowTarget === "BATCH" ? batchJob : null}
+            onShowAdded={(showId) => {
+              setCurrentTab("SHOWS");
+              setSelectedShowId(showId);
+              loadShowsCount();
+            }}
+          />
+        )}
+      </main>
+    </div>
   );
 }
 

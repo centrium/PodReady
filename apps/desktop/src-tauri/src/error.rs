@@ -22,6 +22,12 @@ pub enum AppError {
     #[error("The operation was cancelled.")]
     Cancelled,
 
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
+
     #[error("{0}")]
     SystemError(String),
 }
@@ -63,6 +69,14 @@ impl Serialize for AppError {
                 message: self.to_string(),
                 code: "CANCELLED".to_string(),
             },
+            AppError::DatabaseError(_) => ErrorResponse {
+                message: self.to_string(),
+                code: "DATABASE_ERROR".to_string(),
+            },
+            AppError::NotFound(_) => ErrorResponse {
+                message: self.to_string(),
+                code: "NOT_FOUND".to_string(),
+            },
             AppError::SystemError(_) => ErrorResponse {
                 message: self.to_string(),
                 code: "SYSTEM_ERROR".to_string(),
@@ -72,5 +86,6 @@ impl Serialize for AppError {
         response.serialize(serializer)
     }
 }
+
 
 

@@ -1,5 +1,6 @@
 mod assessment;
 mod batch;
+mod catalogue;
 mod error;
 mod export;
 mod fixplan;
@@ -9,10 +10,16 @@ mod transcription;
 #[cfg(test)]
 pub(crate) static TEST_GLOBAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+use tauri::Manager;
 use assessment::{assess_media, Assessment};
 use batch::{
     cancel_batch_analysis_cmd, get_batch_job_cmd, select_files_cmd, start_batch_analysis_cmd,
     BatchManager,
+};
+use catalogue::{
+    add_batch_episodes_to_show_cmd, add_episode_to_show_cmd, create_show_cmd,
+    delete_catalogue_episode_cmd, delete_show_cmd, get_catalogue_episode_cmd, get_show_cmd,
+    get_shows_cmd, update_show_cmd, CatalogueRepository, CatalogueService,
 };
 use error::AppError;
 use export::{create_publishing_package, ExportOptions, PodReadyPackage, ReportActionItem};
@@ -110,6 +117,17 @@ pub fn run() {
             .build(),
         )?;
       }
+
+      let app_data_dir = app.path().app_data_dir().map_err(|e| {
+        Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get app data dir: {}", e)))
+      })?;
+      let db_path = app_data_dir.join("podready_catalogue.db");
+      let repo = CatalogueRepository::open_file(&db_path).map_err(|e| {
+        Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to open catalogue database at {:?}: {}", db_path, e)))
+      })?;
+      let catalogue_service = CatalogueService::new(repo);
+      app.manage(catalogue_service);
+
       media::binaries::start_background_model_verification();
       Ok(())
     })
@@ -124,9 +142,19 @@ pub fn run() {
         start_batch_analysis_cmd,
         cancel_batch_analysis_cmd,
         get_batch_job_cmd,
-        select_files_cmd
+        select_files_cmd,
+        get_shows_cmd,
+        get_show_cmd,
+        create_show_cmd,
+        update_show_cmd,
+        delete_show_cmd,
+        add_episode_to_show_cmd,
+        add_batch_episodes_to_show_cmd,
+        get_catalogue_episode_cmd,
+        delete_catalogue_episode_cmd
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
+
 
