@@ -617,3 +617,100 @@ export function formatChannelDisplay(ch: number | string | undefined | null): st
   }
   return ch.toString();
 }
+
+// Stage 5E: Batch / Show Publishing Domain
+
+export type PublishingEpisodeStage =
+  | 'PREPARING'
+  | 'PROCESSING'
+  | 'VERIFYING'
+  | 'EXPORTING'
+  | 'TRANSCRIBING'
+  | 'PACKAGING';
+
+export type PublishingEpisodeStatus =
+  | 'WAITING'
+  | 'PREPARING'
+  | 'PROCESSING'
+  | 'VERIFYING'
+  | 'EXPORTING'
+  | 'TRANSCRIBING'
+  | 'PACKAGING'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'SKIPPED';
+
+export interface BatchPublishingEpisode {
+  episodeId: string;
+  sourcePath: string;
+  filename: string;
+  status: PublishingEpisodeStatus;
+  stage?: PublishingEpisodeStage;
+  elapsedSeconds?: number;
+  sourceAvailability?: SourceAvailability;
+  skipReason?: string;
+  package?: PodReadyPackage;
+  error?: string;
+  reanalysed?: boolean;
+}
+
+export interface BatchPublishingSummary {
+  total: number;
+  complete: number;
+  partial: number;
+  failed: number;
+  cancelled: number;
+  skipped: number;
+  elapsedSeconds: number;
+}
+
+export type BatchPublishingJobStatus = 'QUEUED' | 'RUNNING' | 'COMPLETE' | 'CANCELLED';
+
+export interface BatchPublishingJob {
+  id: string;
+  showId?: string;
+  showName?: string;
+  status: BatchPublishingJobStatus;
+  destinationDirectory: string;
+  episodes: BatchPublishingEpisode[];
+  summary: BatchPublishingSummary;
+  createdAt: string;
+  startedAt?: string;
+  elapsedSeconds?: number;
+}
+
+export interface BatchPublishingProgressPayload {
+  jobId: string;
+  episodeId: string;
+  status: PublishingEpisodeStatus;
+  stage?: PublishingEpisodeStage;
+  episode: BatchPublishingEpisode;
+  summary: BatchPublishingSummary;
+}
+
+export interface StartBatchPublishingInput {
+  episodeIds: string[];
+  showId?: string;
+  destinationDirectory: string;
+  options?: Partial<ExportOptions>;
+}
+
+export function formatBatchPublishingDuration(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) {
+    return '0.0 seconds';
+  }
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)} seconds`;
+  }
+  const totalSecs = Math.round(seconds);
+  const mins = Math.floor(totalSecs / 60);
+  const remSecs = totalSecs % 60;
+  if (mins < 60) {
+    return `${mins}m ${remSecs}s`;
+  }
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `${hrs}h ${remMins}m ${remSecs}s`;
+}
+

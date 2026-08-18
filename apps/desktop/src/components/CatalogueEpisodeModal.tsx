@@ -16,6 +16,7 @@ interface CatalogueEpisodeModalProps {
   onClose: () => void;
   onOpenInWorkspace?: (sourcePath: string) => void;
   onDeleteEpisode?: (episodeId: string) => void;
+  onMakePodReady?: (episode: CatalogueEpisode) => void;
 }
 
 export function CatalogueEpisodeModal({
@@ -24,6 +25,7 @@ export function CatalogueEpisodeModal({
   onClose,
   onOpenInWorkspace,
   onDeleteEpisode,
+  onMakePodReady,
 }: CatalogueEpisodeModalProps) {
   const [showCheck, setShowCheck] = useState<ShowCheck | null>(null);
   const [isLoadingShowCheck, setIsLoadingShowCheck] = useState<boolean>(false);
@@ -367,18 +369,26 @@ export function CatalogueEpisodeModal({
             {!isMissing && onOpenInWorkspace && (
               <button
                 onClick={() => onOpenInWorkspace(episode.sourcePath)}
-                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs flex items-center space-x-1.5"
+                className="px-4 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center space-x-1.5"
               >
                 <span>{isChanged ? "Re-analyse in Workspace" : "Open in Workspace"}</span>
+              </button>
+            )}
+            {!isMissing && onMakePodReady && (
+              <button
+                onClick={() => onMakePodReady(episode)}
+                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs flex items-center space-x-1.5"
+              >
+                <span>Make PodReady</span>
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
               </button>
             )}
-
           </div>
         </div>
       </div>
     </div>
   );
 }
+

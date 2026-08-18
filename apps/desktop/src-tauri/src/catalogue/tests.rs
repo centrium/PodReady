@@ -6,7 +6,7 @@ use tempfile::tempdir;
 use crate::assessment::engine::{assess_media, OverallStatus};
 use crate::batch::{BatchEpisode, BatchEpisodeStatus};
 
-use crate::catalogue::baseline::{compute_show_baseline, BaselineMaturity, ShowBaseline};
+use crate::catalogue::baseline::{BaselineMaturity, ShowBaseline};
 use crate::catalogue::models::{
     AddEpisodeStatus, SourceAvailability,
 };

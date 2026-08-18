@@ -1,13 +1,19 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   ShowWithEpisodes,
   CatalogueEpisode,
   ShowBaseline,
+  BatchPublishingJob,
+  BatchPublishingProgressPayload,
 } from "@podready/domain";
 import { formatAudioDuration } from "@podready/domain";
 import { CatalogueEpisodeModal } from "./CatalogueEpisodeModal";
 import { ShowBaselineSection } from "./ShowBaselineSection";
+import { BatchPublishingPreflightModal } from "./BatchPublishingPreflightModal";
+import { BatchPublishingProgress } from "./BatchPublishingProgress";
+import { BatchPublishingResults } from "./BatchPublishingResults";
 
 interface ShowDetailProps {
   showId: string;
@@ -34,6 +40,14 @@ export function ShowDetail({
   const [sortField, setSortField] = useState<SortField>("ANALYSED_AT");
   const [sortAsc, setSortAsc] = useState<boolean>(false); // default newest first
   const [filter, setFilter] = useState<FilterStatus>("ALL");
+
+  // Selection state for Stage 5E Batch Publishing
+  const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<Set<string>>(new Set());
+  const [isPreflightOpen, setIsPreflightOpen] = useState<boolean>(false);
+  const [publishingJob, setPublishingJob] = useState<BatchPublishingJob | null>(null);
+  const [isPublishing, setIsPublishing] = useState<boolean>(false);
+  const [isCancellingPublishing, setIsCancellingPublishing] = useState<boolean>(false);
+  const [showPublishingResults, setShowPublishingResults] = useState<boolean>(false);
 
   // Editing Show Details
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -70,6 +84,63 @@ export function ShowDetail({
 
   useEffect(() => {
     loadShowData();
+  }, [loadShowData]);
+
+  // Listen for batch publishing lifecycle events
+  useEffect(() => {
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenComplete: (() => void) | undefined;
+
+    const setupPublishingListeners = async () => {
+      unlistenProgress = await listen<BatchPublishingProgressPayload>(
+        "batch-publishing-progress",
+        (event) => {
+          const payload = event.payload;
+          setPublishingJob((prev) => {
+            if (!prev || prev.id !== payload.jobId) return prev;
+            const updatedEpisodes = prev.episodes.map((ep) =>
+              ep.episodeId === payload.episodeId ? payload.episode : ep
+            );
+            return {
+              ...prev,
+              episodes: updatedEpisodes,
+              summary: payload.summary,
+            };
+          });
+        }
+      );
+
+      unlistenComplete = await listen<BatchPublishingProgressPayload>(
+        "batch-publishing-complete",
+        (event) => {
+          const payload = event.payload;
+          setPublishingJob((prev) => {
+            if (!prev || prev.id !== payload.jobId) return prev;
+            const updatedEpisodes = prev.episodes.map((ep) =>
+              ep.episodeId === payload.episodeId ? payload.episode : ep
+            );
+            return {
+              ...prev,
+              status: "COMPLETE",
+              episodes: updatedEpisodes,
+              summary: payload.summary,
+            };
+          });
+          setIsPublishing(false);
+          setIsCancellingPublishing(false);
+          setShowPublishingResults(true);
+          setSelectedEpisodeIds(new Set());
+          loadShowData();
+        }
+      );
+    };
+
+    setupPublishingListeners();
+
+    return () => {
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenComplete) unlistenComplete();
+    };
   }, [loadShowData]);
 
   const handleSaveShow = async (e: React.FormEvent) => {
@@ -125,6 +196,11 @@ export function ShowDetail({
     try {
       await invoke("delete_catalogue_episode_cmd", { id: episodeId });
       setSelectedEpisode(null);
+      setSelectedEpisodeIds((prev) => {
+        const next = new Set(prev);
+        next.delete(episodeId);
+        return next;
+      });
       loadShowData();
     } catch (err: any) {
       console.error("Failed to delete episode:", err);
@@ -238,6 +314,81 @@ export function ShowDetail({
     }
   };
 
+  // Selection handlers
+  const handleToggleSelect = (episodeId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedEpisodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(episodeId)) {
+        next.delete(episodeId);
+      } else {
+        next.add(episodeId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllVisible = () => {
+    const allVisibleIds = new Set(sortedEpisodes.map((e) => e.id));
+    setSelectedEpisodeIds(allVisibleIds);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedEpisodeIds(new Set());
+  };
+
+  const selectedEpisodesList = useMemo(() => {
+    if (!data) return [];
+    return data.episodes.filter((e) => selectedEpisodeIds.has(e.id));
+  }, [data, selectedEpisodeIds]);
+
+  const handleStartPublishing = async (destinationDirectory: string) => {
+    if (!data) return;
+    const episodeIds = Array.from(selectedEpisodeIds);
+    if (episodeIds.length === 0) return;
+
+    try {
+      const job = await invoke<BatchPublishingJob>("start_batch_publishing_cmd", {
+        showId: data.show.id,
+        showName: data.show.name,
+        episodeIds,
+        destinationDirectory,
+        options: null,
+      });
+      setPublishingJob(job);
+      setIsPublishing(true);
+      setIsPreflightOpen(false);
+    } catch (err: any) {
+      console.error("Failed to start batch publishing:", err);
+      setError(err.message || "Failed to start batch publishing.");
+      throw err;
+    }
+  };
+
+  const handleCancelPublishing = async () => {
+    if (!publishingJob) return;
+    setIsCancellingPublishing(true);
+    try {
+      await invoke("cancel_batch_publishing_cmd", { jobId: publishingJob.id });
+      const updated = await invoke<BatchPublishingJob>("get_batch_publishing_job_cmd", {
+        jobId: publishingJob.id,
+      });
+      setPublishingJob(updated);
+    } catch (err) {
+      console.error("Failed to cancel publishing job:", err);
+    } finally {
+      setIsPublishing(false);
+      setIsCancellingPublishing(false);
+      setShowPublishingResults(true);
+    }
+  };
+
+  const handlePublishSingleEpisode = (ep: CatalogueEpisode) => {
+    setSelectedEpisodeIds(new Set([ep.id]));
+    setIsPreflightOpen(true);
+    setSelectedEpisode(null);
+  };
+
   if (isLoading) {
     return (
       <div className="w-full max-w-4xl bg-white border border-gray-200 rounded-2xl p-12 text-center shadow-xs">
@@ -271,6 +422,9 @@ export function ShowDetail({
   ).length;
   const changedCount = episodes.filter((e) => e.sourceAvailability === "CHANGED").length;
   const missingCount = episodes.filter((e) => e.sourceAvailability === "MISSING").length;
+
+  const allVisibleSelected =
+    sortedEpisodes.length > 0 && sortedEpisodes.every((e) => selectedEpisodeIds.has(e.id));
 
   return (
     <div className="w-full max-w-4xl bg-white border border-gray-200 rounded-2xl shadow-sm p-8 flex flex-col space-y-6">
@@ -459,10 +613,58 @@ export function ShowDetail({
         </div>
       </div>
 
+      {/* Stage 5E: Selection Action Bar */}
+      {selectedEpisodeIds.size > 0 && (
+        <div className="flex items-center justify-between p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-xl transition-all">
+          <div className="flex items-center space-x-3 text-xs">
+            <span className="font-bold text-indigo-950">
+              {selectedEpisodeIds.size} {selectedEpisodeIds.size === 1 ? "episode selected" : "episodes selected"}
+            </span>
+            <button
+              onClick={handleSelectAllVisible}
+              className="font-semibold text-indigo-700 hover:text-indigo-900 underline"
+            >
+              Select All Visible ({sortedEpisodes.length})
+            </button>
+            <button
+              onClick={handleClearSelection}
+              className="font-medium text-gray-500 hover:text-gray-700"
+            >
+              Clear
+            </button>
+          </div>
+
+          <button
+            onClick={() => setIsPreflightOpen(true)}
+            className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs flex items-center space-x-1.5 cursor-pointer"
+          >
+            <span>Make PodReady</span>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Episode Table */}
       <div className="border border-gray-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="grid grid-cols-12 bg-gray-50 px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200">
-          <div className="col-span-4">Episode</div>
+        <div className="grid grid-cols-12 bg-gray-50 px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-200 items-center">
+          <div className="col-span-4 flex items-center space-x-2.5">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  handleSelectAllVisible();
+                } else {
+                  handleClearSelection();
+                }
+              }}
+              className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+              title="Select all visible episodes"
+            />
+            <span>Episode</span>
+          </div>
           <div className="col-span-2 text-center">Duration</div>
           <div className="col-span-2 text-center">Loudness</div>
           <div className="col-span-2 text-center">True Peak</div>
@@ -473,39 +675,53 @@ export function ShowDetail({
           {sortedEpisodes.map((ep) => {
             const isMissing = ep.sourceAvailability === "MISSING";
             const isChanged = ep.sourceAvailability === "CHANGED";
+            const isSelected = selectedEpisodeIds.has(ep.id);
+
             return (
               <div
                 key={ep.id}
                 onClick={() => setSelectedEpisode(ep)}
-                className="grid grid-cols-12 items-center px-4 py-3.5 hover:bg-indigo-50/30 transition-colors cursor-pointer"
+                className={`grid grid-cols-12 items-center px-4 py-3.5 transition-colors cursor-pointer ${
+                  isSelected
+                    ? "bg-indigo-50/50 hover:bg-indigo-50/70"
+                    : "hover:bg-indigo-50/30"
+                }`}
               >
-                {/* Filename & Analysed Date */}
-                <div className="col-span-4 pr-2 truncate">
-                  <div className="flex items-center space-x-1.5">
-                    <span className="text-sm font-medium text-gray-900 truncate" title={ep.filename}>
-                      {ep.filename}
+                {/* Checkbox, Filename & Analysed Date */}
+                <div className="col-span-4 pr-2 truncate flex items-center space-x-2.5">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onClick={(e) => handleToggleSelect(ep.id, e)}
+                    onChange={() => {}}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                  />
+                  <div className="truncate">
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-sm font-medium text-gray-900 truncate" title={ep.filename}>
+                        {ep.filename}
+                      </span>
+                      {isChanged && (
+                        <span
+                          className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded shrink-0"
+                          title="Source file was modified on disk since analysis"
+                        >
+                          Changed
+                        </span>
+                      )}
+                      {isMissing && (
+                        <span
+                          className="text-[10px] font-semibold text-rose-700 bg-rose-100 px-1.5 py-0.2 rounded shrink-0"
+                          title="Source file is not at original path"
+                        >
+                          Missing
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-400 block mt-0.5">
+                      Analysed {formatAnalysedDate(ep.analysedAt)} · {ep.format}
                     </span>
-                    {isChanged && (
-                      <span
-                        className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded shrink-0"
-                        title="Source file was modified on disk since analysis"
-                      >
-                        Changed
-                      </span>
-                    )}
-                    {isMissing && (
-                      <span
-                        className="text-[10px] font-semibold text-rose-700 bg-rose-100 px-1.5 py-0.2 rounded shrink-0"
-                        title="Source file is not at original path"
-                      >
-                        Missing
-                      </span>
-                    )}
-
                   </div>
-                  <span className="text-xs text-gray-400 block mt-0.5">
-                    Analysed {formatAnalysedDate(ep.analysedAt)} · {ep.format}
-                  </span>
                 </div>
 
                 {/* Duration */}
@@ -549,6 +765,43 @@ export function ShowDetail({
           onClose={() => setSelectedEpisode(null)}
           onOpenInWorkspace={onOpenInWorkspace}
           onDeleteEpisode={handleDeleteEpisode}
+          onMakePodReady={handlePublishSingleEpisode}
+        />
+      )}
+
+      {/* Stage 5E: Batch Publishing Preflight Modal */}
+      <BatchPublishingPreflightModal
+        isOpen={isPreflightOpen}
+        showName={show.name}
+        selectedEpisodes={selectedEpisodesList}
+        onClose={() => setIsPreflightOpen(false)}
+        onStartPublishing={handleStartPublishing}
+      />
+
+      {/* Stage 5E: Batch Publishing Progress Modal */}
+      {isPublishing && publishingJob && (
+        <BatchPublishingProgress
+          job={publishingJob}
+          onCancel={handleCancelPublishing}
+          isCancelling={isCancellingPublishing}
+        />
+      )}
+
+      {/* Stage 5E: Batch Publishing Results Modal */}
+      {showPublishingResults && publishingJob && (
+        <BatchPublishingResults
+          job={publishingJob}
+          onClose={() => {
+            setShowPublishingResults(false);
+            setPublishingJob(null);
+          }}
+          onOpenEpisode={(epId) => {
+            const ep = episodes.find((e) => e.id === epId);
+            if (ep) {
+              setSelectedEpisode(ep);
+              setShowPublishingResults(false);
+            }
+          }}
         />
       )}
 

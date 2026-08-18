@@ -1,9 +1,16 @@
 pub mod engine;
 pub mod model;
+pub mod publishing;
+#[cfg(test)]
+pub mod publishing_tests;
 
+use crate::catalogue::service::CatalogueService;
 use crate::error::AppError;
+use crate::export::types::{ExportOptions, PodReadyPackage};
+use crate::media::analysis::{AudioMeasurements, ClippingAnalysis, ClippingEvidence};
 use engine::{create_batch_job, run_batch_job, BatchJobHandle, DEFAULT_CONCURRENCY};
 pub use model::*;
+pub use publishing::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
@@ -113,6 +120,206 @@ pub fn get_batch_job_cmd(
 }
 
 #[tauri::command]
+pub async fn start_batch_publishing_cmd(
+    show_id: Option<String>,
+    show_name: Option<String>,
+    episode_ids: Vec<String>,
+    destination_directory: String,
+    options: Option<ExportOptions>,
+    app: AppHandle,
+    state: tauri::State<'_, BatchPublishingManager>,
+    catalogue: tauri::State<'_, CatalogueService>,
+) -> Result<BatchPublishingJob, AppError> {
+    let mut input_episodes = Vec::new();
+
+    for ep_id in episode_ids {
+        if let Ok(cat_ep) = catalogue.get_episode(&ep_id) {
+            input_episodes.push(BatchPublishingEpisodeInput {
+                id: cat_ep.id,
+                source_path: cat_ep.source_path,
+                filename: cat_ep.filename,
+                source_availability: cat_ep.source_availability,
+            });
+        }
+    }
+
+
+
+    let default_options = ExportOptions {
+        destination_directory: destination_directory.clone(),
+        include_audio: true,
+        include_transcript: true,
+        include_report: true,
+        metadata: None,
+    };
+    let opts = options.unwrap_or(default_options);
+
+    let app_handle = app.clone();
+    let cat_service = (*catalogue).clone();
+
+    state.start_job(
+        show_id,
+        show_name,
+        input_episodes,
+        destination_directory,
+        opts,
+        Some(cat_service),
+        move |payload| {
+            let _ = app_handle.emit("batch-publishing-progress", &payload);
+            if payload.status == PublishingEpisodeStatus::Complete
+                || payload.status == PublishingEpisodeStatus::Failed
+                || payload.status == PublishingEpisodeStatus::Cancelled
+                || payload.status == PublishingEpisodeStatus::Skipped
+            {
+                if payload.summary.complete
+                    + payload.summary.partial
+                    + payload.summary.failed
+                    + payload.summary.cancelled
+                    + payload.summary.skipped
+                    >= payload.summary.total
+                {
+                    let _ = app_handle.emit("batch-publishing-complete", &payload);
+                }
+            }
+        },
+    )
+}
+
+#[tauri::command]
+pub fn cancel_batch_publishing_cmd(
+    job_id: String,
+    state: tauri::State<'_, BatchPublishingManager>,
+) -> Result<(), AppError> {
+    state.cancel_job(&job_id)
+}
+
+#[tauri::command]
+pub fn get_batch_publishing_job_cmd(
+    job_id: String,
+    state: tauri::State<'_, BatchPublishingManager>,
+) -> Result<BatchPublishingJob, AppError> {
+    state.get_job(&job_id)
+}
+
+#[tauri::command]
+pub async fn publish_single_catalogue_episode_cmd(
+    episode_id: String,
+    destination_directory: String,
+    options: Option<ExportOptions>,
+    catalogue: tauri::State<'_, CatalogueService>,
+) -> Result<PodReadyPackage, AppError> {
+    let cat_ep = catalogue.get_episode(&episode_id)?;
+
+    let default_options = ExportOptions {
+        destination_directory: destination_directory.clone(),
+        include_audio: true,
+        include_transcript: true,
+        include_report: true,
+        metadata: None,
+    };
+    let opts = options.unwrap_or(default_options);
+
+    let (cached_meas, cached_assess) = if cat_ep.source_availability == crate::catalogue::models::SourceAvailability::Changed {
+        (None, None)
+    } else {
+        let evidence = match cat_ep.clipping_evidence.to_uppercase().as_str() {
+            "POSSIBLE" => ClippingEvidence::POSSIBLE,
+            "UNCERTAIN" => ClippingEvidence::UNCERTAIN,
+            _ => ClippingEvidence::NONE,
+        };
+        let meas = AudioMeasurements {
+            integrated_loudness_lufs: cat_ep.integrated_loudness_lufs,
+            true_peak_dbtp: cat_ep.true_peak_dbtp,
+            leading_silence_seconds: cat_ep.leading_silence_seconds,
+            trailing_silence_seconds: cat_ep.trailing_silence_seconds,
+            clipping: ClippingAnalysis {
+                sample_peak_dbfs: None,
+                samples_at_ceiling: 0,
+                flat_factor: 0.0,
+                evidence,
+            },
+        };
+        (Some(meas), cat_ep.assessment)
+    };
+
+    let pkg = tauri::async_runtime::spawn_blocking(move || {
+        crate::export::publish_single_episode(
+            &cat_ep.source_path,
+            &destination_directory,
+            &opts,
+            cached_meas,
+            cached_assess,
+            None,
+            None,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))??;
+
+    Ok(pkg)
+}
+
+
+#[tauri::command]
+pub async fn select_destination_directory_cmd() -> Result<Option<String>, AppError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            set chosenFolder to choose folder with prompt "Select Destination Directory for PodReady Packages"
+            POSIX path of chosenFolder
+            "#;
+
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| AppError::SystemError(format!("Failed to open folder dialog: {}", e)))?;
+
+            if !output.status.success() {
+                return Ok(None);
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let path = stdout.trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
+}
+
+#[tauri::command]
+pub async fn open_path_in_file_manager_cmd(path: String) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(&path).spawn();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("explorer").arg(&path).spawn();
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
+}
+
+#[tauri::command]
 pub async fn select_files_cmd() -> Result<Vec<String>, AppError> {
     tauri::async_runtime::spawn_blocking(|| {
         #[cfg(target_os = "macos")]
@@ -154,6 +361,7 @@ pub async fn select_files_cmd() -> Result<Vec<String>, AppError> {
     .await
     .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
 }
+
 
 #[cfg(test)]
 mod tests {

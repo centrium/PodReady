@@ -1,11 +1,15 @@
 pub mod mp3;
 pub mod package;
+pub mod publish;
 pub mod report;
 pub mod transcript;
 pub mod types;
 pub mod verification;
 
 pub use package::create_publishing_package;
+pub use publish::publish_single_episode;
+#[allow(unused_imports)]
+pub use publish::PublishingEpisodeStage;
 pub use types::*;
 
 #[allow(unused_imports)]

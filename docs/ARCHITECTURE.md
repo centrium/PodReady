@@ -291,3 +291,53 @@ PodReady provides a dedicated, deterministic comparison engine to answer: *"Does
      - Loudness & True Peak: 1 decimal place with proper minus sign (e.g. `−23.0 LUFS`, `0.0 dBTP`).
      - Silence: 1 decimal place (e.g. `0.3s`, `0.8s`).
 
+### Batch / Show Publishing Architecture (Stage 5E)
+Stage 5E connects the Show catalogue to the single authoritative publishing engine:
+
+```text
+React Show Detail / Catalogue Selection
+   ↓ (start_batch_publishing_cmd / publish_single_catalogue_episode_cmd)
+BatchPublishingManager (Rust State)
+   ↓ (serial queue execution with Concurrency = 1)
+For each selected episode:
+   ├── Source Availability Check (AVAILABLE / CHANGED / MISSING)
+   │   ├── MISSING ──> SKIPPED ("Source file unavailable", continue batch)
+   │   ├── CHANGED ──> Re-analyse source on disk ──> Update catalogue ──> Publish
+   │   └── AVAILABLE ──> Reuse cached initial measurements ──> Publish
+   │
+   └── publish_single_episode (Unified Reusable Engine)
+       ├── File Inspection & Facts extraction
+       ├── Profile Assessment (Stereo -16 LUFS / Mono -19 LUFS)
+       ├── Deterministic FixPlan Generation
+       ├── Two-pass FFmpeg audio processing (loudnorm, sample rate, channels, peak)
+       ├── Processing verification loop
+       ├── MP3 encoding (192kbps stereo / 128kbps mono + metadata/artwork)
+       ├── Mandatory Output MP3 verification
+       ├── Bundled Whisper speech transcription (whisper.cpp)
+       ├── TXT transcript export
+       ├── JSON report generation
+       └── Assemble PodReady publishing package ([Destination]/[Stem]_PodReady/)
+```
+
+#### Core Invariants & Operating Boundaries:
+1. **Single Authoritative Publishing Pipeline**:
+   - There is NO separate "batch mastering engine" or second publishing implementation. Both single-episode workspace export and show batch publishing invoke `publish_single_episode`.
+2. **Fixed Audio Targets & Show Check Non-Interference**:
+   - Show Check (Stages 5C/5D) is strictly descriptive and historical. It never modifies audio targets or processing decisions.
+   - Publishing target is always derived from the Assessment Profile (`podcast-stereo-v1` -> -16 LUFS / -1.5 dBTP; `podcast-mono-v1` -> -19 LUFS / -1.5 dBTP). A mono episode in a stereo show is always mastered to -19 LUFS.
+3. **Serial Queue & Conservative Concurrency**:
+   - Concurrency is fixed at 1 (`concurrency = 1`). Serial processing guarantees stable memory and CPU/Metal utilization on base 8GB Apple Silicon hardware during Whisper speech inference.
+4. **Source Immutability**:
+   - Original source media is strictly read-only. PodReady never modifies, overwrites, moves, or deletes source files on disk.
+5. **Failure Isolation**:
+   - A processing error in one episode marks that episode `FAILED` but does NOT halt the batch.
+   - If transcription fails for an episode, the verified MP3 and report are retained and delivered as a `partial` package.
+   - Packages completed before an error or cancellation remain intact on disk.
+6. **Cancellation & Process Hygiene**:
+   - Cancellation immediately sends SIGKILL (`kill -9` / `taskkill /F`) to active child processes (FFmpeg / Whisper) tracked in `active_pids`.
+   - Cleans temporary files in `podready_workspace/`.
+   - Marks all waiting episodes as `CANCELLED` and preserves already completed packages.
+7. **Package Delivery & Manifest**:
+   - Creates independent folders for each episode under the user-chosen destination: `[Destination]/[Stem]_PodReady/` containing `[Stem]_ready.mp3`, `[Stem]_transcript.txt`, and `[Stem]_report.json`.
+   - Writes `podready_batch_manifest.json` at the root of the destination folder summarizing job metadata and episode outcomes.
+

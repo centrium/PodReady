@@ -13,8 +13,10 @@ pub(crate) static TEST_GLOBAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex:
 use tauri::Manager;
 use assessment::{assess_media, Assessment};
 use batch::{
-    cancel_batch_analysis_cmd, get_batch_job_cmd, select_files_cmd, start_batch_analysis_cmd,
-    BatchManager,
+    cancel_batch_analysis_cmd, cancel_batch_publishing_cmd, get_batch_job_cmd,
+    get_batch_publishing_job_cmd, open_path_in_file_manager_cmd,
+    publish_single_catalogue_episode_cmd, select_destination_directory_cmd, select_files_cmd,
+    start_batch_analysis_cmd, start_batch_publishing_cmd, BatchManager, BatchPublishingManager,
 };
 use catalogue::{
     add_batch_episodes_to_show_cmd, add_episode_to_show_cmd, create_show_cmd,
@@ -110,6 +112,7 @@ async fn export_package_cmd(
 pub fn run() {
   tauri::Builder::default()
     .manage(BatchManager::new())
+    .manage(BatchPublishingManager::new())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -143,6 +146,12 @@ pub fn run() {
         start_batch_analysis_cmd,
         cancel_batch_analysis_cmd,
         get_batch_job_cmd,
+        start_batch_publishing_cmd,
+        cancel_batch_publishing_cmd,
+        get_batch_publishing_job_cmd,
+        publish_single_catalogue_episode_cmd,
+        select_destination_directory_cmd,
+        open_path_in_file_manager_cmd,
         select_files_cmd,
         get_shows_cmd,
         get_show_cmd,
@@ -160,5 +169,6 @@ pub fn run() {
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
+
 
 
