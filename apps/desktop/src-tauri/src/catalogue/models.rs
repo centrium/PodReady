@@ -115,3 +115,44 @@ pub struct UpdateShowInput {
     pub name: String,
     pub description: Option<String>,
 }
+
+// Stage 5F: Move and Relink Models
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MoveEpisodeOutcomeStatus {
+    Moved,
+    AlreadyExists,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveEpisodeOutcome {
+    pub episode_id: String,
+    pub filename: String,
+    pub status: MoveEpisodeOutcomeStatus,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveEpisodesResult {
+    pub target_show_id: String,
+    pub target_show_name: String,
+    pub total_requested: usize,
+    pub moved: usize,
+    pub already_exists: usize,
+    pub failed: usize,
+    pub outcomes: Vec<MoveEpisodeOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct RelinkEpisodeOutcome {
+    pub episode_id: String,
+    pub new_source_path: String,
+    pub success: bool,
+    pub message: Option<String>,
+}

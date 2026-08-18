@@ -341,3 +341,44 @@ For each selected episode:
    - Creates independent folders for each episode under the user-chosen destination: `[Destination]/[Stem]_PodReady/` containing `[Stem]_ready.mp3`, `[Stem]_transcript.txt`, and `[Stem]_report.json`.
    - Writes `podready_batch_manifest.json` at the root of the destination folder summarizing job metadata and episode outcomes.
 
+### Catalogue & Show Workflow Completion (Stage 5F)
+Stage 5F completes the practical lifecycle and workflow capabilities for managing Shows and episodes:
+
+```text
+Show Catalogue Lifecycle & Management
+├── Show Management
+│   ├── Create Show (name, optional description)
+│   ├── Edit Show Details (rename, change description)
+│   ├── Delete Show Record (database association only; source files untouched)
+│   └── Whole-Show Publishing ("Make Show PodReady")
+│
+├── Direct Episode Ingestion
+│   └── "+ Add Episodes" in Show Detail (runs batch analysis & auto-catalogues into current show)
+│
+├── Episode Mutation & Relinking
+│   ├── Remove from Show (single / multi; database association deleted; media files untouched)
+│   ├── Move to Show (single / multi; transactional transfer; target duplicate authoritative handling)
+│   ├── In-Place Re-analysis (re-analyses changed sources and returns them to AVAILABLE)
+│   └── Locate Missing File (relinquishes stale path, verifies new location, re-analyses)
+│
+└── Historical Calibration & Baseline Consistency
+    ├── Baseline recalculates immediately on addition, deletion, move, or re-analysis
+    └── Show Check Leave-One-Out updates dynamically across all catalogue mutations
+```
+
+#### Core Invariants & Operating Boundaries:
+1. **Absolute Source-Safety Guarantee**:
+   - Every catalogue modification operation (show deletion, episode removal, moving between shows, re-analysis, relinking) operates *strictly* on database records. Original audio files, intermediate outputs, and publishing packages on disk are never altered, moved, or deleted.
+2. **Move Semantics & Target Deduplication**:
+   - One podcast episode belongs to exactly one show at a time.
+   - Moving Episode A from Show 1 to Show 2 executes inside an atomic SQLite transaction.
+   - If Show 2 already contains an episode pointing to the same source file, the destination record remains authoritative, the source association is cleanly removed, and the operation returns `ALREADY_EXISTS` without creating redundant records.
+   - Show 1 and Show 2 baselines update immediately upon transaction commit.
+3. **Changed Source Direct Re-analysis**:
+   - When an episode's source file changes on disk, users can trigger direct in-place re-analysis.
+   - PodReady re-inspects, re-measures acoustics, re-assesses profile compliance, updates SQLite records, and resets `source_availability` to `AVAILABLE`, restoring baseline eligibility without requiring manual workspace roundtrips.
+4. **Missing Source Historical Retention**:
+   - Missing episodes are retained with their historical measurements intact for show context and baseline computation, but are excluded from direct publishing until relinked.
+5. **Selection & Filter Consistency**:
+   - Selection operations (e.g. Select All Visible) respect active search and status filters, preventing unintended mutations to hidden rows.
+

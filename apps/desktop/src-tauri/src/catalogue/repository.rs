@@ -1,7 +1,10 @@
 use rusqlite::{params, Connection, Row};
 use crate::assessment::Assessment;
 use crate::catalogue::migrations::run_migrations;
-use crate::catalogue::models::{CatalogueEpisode, Show, ShowSummary, SourceAvailability};
+use crate::catalogue::models::{
+    CatalogueEpisode, MoveEpisodeOutcome, MoveEpisodeOutcomeStatus, MoveEpisodesResult, Show,
+    ShowSummary, SourceAvailability,
+};
 use crate::error::AppError;
 use crate::media::ffprobe::MediaFormat;
 
@@ -361,6 +364,240 @@ impl CatalogueRepository {
 
         if rows == 0 {
             return Err(AppError::NotFound(format!("Episode {} not found", id)));
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_episodes(&mut self, ids: &[String]) -> Result<usize, AppError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to begin transaction: {}", e)))?;
+
+        let mut deleted_count = 0;
+        let mut affected_shows = std::collections::HashSet::new();
+
+        for id in ids {
+            // Find show_id first
+            let show_id: Option<String> = tx
+                .query_row(
+                    "SELECT show_id FROM episodes WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(sid) = show_id {
+                let affected = tx
+                    .execute("DELETE FROM episodes WHERE id = ?1", params![id])
+                    .map_err(|e| AppError::DatabaseError(format!("Failed to delete episode {}: {}", id, e)))?;
+                if affected > 0 {
+                    deleted_count += affected;
+                    affected_shows.insert(sid);
+                }
+            }
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        for sid in affected_shows {
+            let _ = tx.execute(
+                "UPDATE shows SET updated_at = ?1 WHERE id = ?2",
+                params![now, sid],
+            );
+        }
+
+        tx.commit()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to commit delete_episodes transaction: {}", e)))?;
+
+        Ok(deleted_count)
+    }
+
+    pub fn move_episodes(
+        &mut self,
+        episode_ids: &[String],
+        target_show_id: &str,
+        now: &str,
+    ) -> Result<MoveEpisodesResult, AppError> {
+        // Verify target show exists
+        let target_show: Show = self
+            .get_show_by_id(target_show_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Target show {} not found", target_show_id)))?;
+
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to begin transaction for move_episodes: {}", e)))?;
+
+        let mut moved = 0;
+        let mut already_exists = 0;
+        let mut failed = 0;
+        let mut outcomes = Vec::new();
+        let mut source_show_ids = std::collections::HashSet::new();
+
+        for ep_id in episode_ids {
+            // Fetch episode record
+            let ep_info: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT id, show_id, source_path, filename FROM episodes WHERE id = ?1",
+                    params![ep_id],
+                    |row| Ok((row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .ok();
+
+            let (source_show_id, source_path, filename) = match ep_info {
+                Some(info) => info,
+                None => {
+                    failed += 1;
+                    outcomes.push(MoveEpisodeOutcome {
+                        episode_id: ep_id.clone(),
+                        filename: "Unknown".to_string(),
+                        status: MoveEpisodeOutcomeStatus::Failed,
+                        message: Some(format!("Episode {} not found", ep_id)),
+                    });
+                    continue;
+                }
+            };
+
+            source_show_ids.insert(source_show_id.clone());
+
+            // If source show is already target show
+            if source_show_id == target_show_id {
+                already_exists += 1;
+                outcomes.push(MoveEpisodeOutcome {
+                    episode_id: ep_id.clone(),
+                    filename,
+                    status: MoveEpisodeOutcomeStatus::AlreadyExists,
+                    message: Some("Episode is already in the destination show.".to_string()),
+                });
+                continue;
+            }
+
+            // Check if target show already has an episode with this source_path
+            let existing_in_target: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM episodes WHERE show_id = ?1 AND source_path = ?2",
+                    params![target_show_id, source_path],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(_target_ep_id) = existing_in_target {
+                // Destination already contains this source file.
+                // Destination record remains authoritative. Remove association from source show safely.
+                tx.execute("DELETE FROM episodes WHERE id = ?1", params![ep_id])
+                    .map_err(|e| AppError::DatabaseError(format!("Failed to clean up moved episode: {}", e)))?;
+
+                already_exists += 1;
+                outcomes.push(MoveEpisodeOutcome {
+                    episode_id: ep_id.clone(),
+                    filename,
+                    status: MoveEpisodeOutcomeStatus::AlreadyExists,
+                    message: Some(
+                        "Episode with identical source already existed in destination show; source show association removed."
+                            .to_string(),
+                    ),
+                });
+            } else {
+                // Normal move: update show_id and updated_at
+                tx.execute(
+                    "UPDATE episodes SET show_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![target_show_id, now, ep_id],
+                )
+                .map_err(|e| AppError::DatabaseError(format!("Failed to move episode {}: {}", ep_id, e)))?;
+
+                moved += 1;
+                outcomes.push(MoveEpisodeOutcome {
+                    episode_id: ep_id.clone(),
+                    filename,
+                    status: MoveEpisodeOutcomeStatus::Moved,
+                    message: Some("Episode moved to destination show.".to_string()),
+                });
+            }
+        }
+
+        // Update target show updated_at
+        let _ = tx.execute(
+            "UPDATE shows SET updated_at = ?1 WHERE id = ?2",
+            params![now, target_show_id],
+        );
+
+        // Update source show(s) updated_at
+        for sid in source_show_ids {
+            let _ = tx.execute(
+                "UPDATE shows SET updated_at = ?1 WHERE id = ?2",
+                params![now, sid],
+            );
+        }
+
+        tx.commit()
+            .map_err(|e| AppError::DatabaseError(format!("Failed to commit move_episodes transaction: {}", e)))?;
+
+        Ok(MoveEpisodesResult {
+            target_show_id: target_show.id,
+            target_show_name: target_show.name,
+            total_requested: episode_ids.len(),
+            moved,
+            already_exists,
+            failed,
+            outcomes,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn relink_episode(
+        &mut self,
+        episode_id: &str,
+        new_source_path: &str,
+        new_filename: &str,
+        file_size_bytes: i64,
+        source_modified_at: Option<&str>,
+        now: &str,
+    ) -> Result<(), AppError> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE episodes SET
+                    source_path = ?1,
+                    filename = ?2,
+                    file_size_bytes = ?3,
+                    source_modified_at = ?4,
+                    updated_at = ?5
+                 WHERE id = ?6",
+                params![
+                    new_source_path,
+                    new_filename,
+                    file_size_bytes,
+                    source_modified_at,
+                    now,
+                    episode_id,
+                ],
+            )
+            .map_err(|e| AppError::DatabaseError(format!("Failed to relink episode: {}", e)))?;
+
+        if rows == 0 {
+            return Err(AppError::NotFound(format!("Episode {} not found", episode_id)));
+        }
+
+        // Update show updated_at
+        let show_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT show_id FROM episodes WHERE id = ?1",
+                params![episode_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(sid) = show_id {
+            let _ = self.conn.execute(
+                "UPDATE shows SET updated_at = ?1 WHERE id = ?2",
+                params![now, sid],
+            );
         }
 
         Ok(())

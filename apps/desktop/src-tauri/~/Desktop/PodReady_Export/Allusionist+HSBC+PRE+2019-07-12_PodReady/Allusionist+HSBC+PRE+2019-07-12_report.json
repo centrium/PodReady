@@ -1,0 +1,255 @@
+{
+  "podreadyVersion": "1.0.0",
+  "createdAt": "2026-01-01T00:00:00Z (timestamp: 1787082294)",
+  "packageName": "Allusionist+HSBC+PRE+2019-07-12_PodReady",
+  "sourceFilename": "Allusionist+HSBC+PRE+2019-07-12.mp3",
+  "metadata": null,
+  "actionsApplied": [],
+  "beforeMeasurements": {
+    "integratedLoudnessLufs": -16.6,
+    "truePeakDbtp": -4.2,
+    "leadingSilenceSeconds": 0.0,
+    "trailingSilenceSeconds": 0.0,
+    "clipping": {
+      "samplePeakDbfs": null,
+      "samplesAtCeiling": 0,
+      "flatFactor": 0.0,
+      "evidence": "NONE"
+    }
+  },
+  "beforeAssessment": {
+    "overallStatus": "READY",
+    "summary": "Ready for publication",
+    "profileId": "podcast-stereo-v1",
+    "profileVersion": "1.0.0",
+    "profileName": "Podcast — Stereo",
+    "audioChecks": [
+      {
+        "id": "loudness",
+        "label": "Integrated loudness",
+        "status": "GOOD",
+        "displayValue": "−16.6 LUFS",
+        "message": "Safely within recommended range for a stereo podcast.",
+        "fixable": false,
+        "sparkline": {
+          "min": -30.0,
+          "max": -10.0,
+          "target": -16.0,
+          "value": -16.6,
+          "ranges": [
+            {
+              "from": -17.5,
+              "to": -14.5
+            }
+          ]
+        }
+      },
+      {
+        "id": "true_peak",
+        "label": "True peak",
+        "status": "GOOD",
+        "displayValue": "−4.2 dBTP",
+        "message": "Safely within range.",
+        "fixable": false,
+        "sparkline": {
+          "min": -6.0,
+          "max": 0.0,
+          "target": -1.5,
+          "value": -4.2,
+          "ranges": [
+            {
+              "from": -6.0,
+              "to": -1.5
+            }
+          ]
+        }
+      },
+      {
+        "id": "leading_silence",
+        "label": "Opening silence",
+        "status": "GOOD",
+        "displayValue": "0.0 sec",
+        "message": "Looks good.",
+        "fixable": false
+      },
+      {
+        "id": "trailing_silence",
+        "label": "Closing silence",
+        "status": "GOOD",
+        "displayValue": "0.0 sec",
+        "message": "Looks good.",
+        "fixable": false
+      },
+      {
+        "id": "clipping",
+        "label": "Peak clipping",
+        "status": "GOOD",
+        "displayValue": "None detected",
+        "message": "No obvious clipping detected.",
+        "fixable": false
+      }
+    ],
+    "fileChecks": [
+      {
+        "id": "format",
+        "label": "Format",
+        "status": "GOOD",
+        "displayValue": "MP3",
+        "message": "Standard distribution format.",
+        "fixable": false
+      },
+      {
+        "id": "sample_rate",
+        "label": "Sample rate",
+        "status": "GOOD",
+        "displayValue": "44.1 kHz",
+        "message": "Standard podcast sample rate.",
+        "fixable": false
+      },
+      {
+        "id": "channels",
+        "label": "Channel configuration",
+        "status": "GOOD",
+        "displayValue": "Stereo",
+        "message": "Standard podcast channel configuration.",
+        "fixable": false
+      },
+      {
+        "id": "bitrate",
+        "label": "Bitrate",
+        "status": "GOOD",
+        "displayValue": "128 kbps",
+        "message": "Appropriate stereo delivery bitrate.",
+        "fixable": false
+      }
+    ]
+  },
+  "finalMp3Measurements": {
+    "integratedLoudnessLufs": -16.8,
+    "truePeakDbtp": -4.5,
+    "leadingSilenceSeconds": 0.0,
+    "trailingSilenceSeconds": 0.0,
+    "clipping": {
+      "samplePeakDbfs": -4.481257,
+      "samplesAtCeiling": 0,
+      "flatFactor": 0.0,
+      "evidence": "NONE"
+    }
+  },
+  "finalMp3Assessment": {
+    "overallStatus": "READY",
+    "summary": "Ready for publication",
+    "profileId": "podcast-stereo-v1",
+    "profileVersion": "1.0.0",
+    "profileName": "Podcast — Stereo",
+    "audioChecks": [
+      {
+        "id": "loudness",
+        "label": "Integrated loudness",
+        "status": "GOOD",
+        "displayValue": "−16.8 LUFS",
+        "message": "Safely within recommended range for a stereo podcast.",
+        "fixable": false,
+        "sparkline": {
+          "min": -30.0,
+          "max": -10.0,
+          "target": -16.0,
+          "value": -16.8,
+          "ranges": [
+            {
+              "from": -17.5,
+              "to": -14.5
+            }
+          ]
+        }
+      },
+      {
+        "id": "true_peak",
+        "label": "True peak",
+        "status": "GOOD",
+        "displayValue": "−4.5 dBTP",
+        "message": "Safely within range.",
+        "fixable": false,
+        "sparkline": {
+          "min": -6.0,
+          "max": 0.0,
+          "target": -1.5,
+          "value": -4.5,
+          "ranges": [
+            {
+              "from": -6.0,
+              "to": -1.5
+            }
+          ]
+        }
+      },
+      {
+        "id": "leading_silence",
+        "label": "Opening silence",
+        "status": "GOOD",
+        "displayValue": "0.0 sec",
+        "message": "Looks good.",
+        "fixable": false
+      },
+      {
+        "id": "trailing_silence",
+        "label": "Closing silence",
+        "status": "GOOD",
+        "displayValue": "0.0 sec",
+        "message": "Looks good.",
+        "fixable": false
+      },
+      {
+        "id": "clipping",
+        "label": "Peak clipping",
+        "status": "GOOD",
+        "displayValue": "None detected",
+        "message": "No obvious clipping detected.",
+        "fixable": false
+      }
+    ],
+    "fileChecks": [
+      {
+        "id": "format",
+        "label": "Format",
+        "status": "GOOD",
+        "displayValue": "MP3",
+        "message": "Standard distribution format.",
+        "fixable": false
+      },
+      {
+        "id": "sample_rate",
+        "label": "Sample rate",
+        "status": "GOOD",
+        "displayValue": "44.1 kHz",
+        "message": "Standard podcast sample rate.",
+        "fixable": false
+      },
+      {
+        "id": "channels",
+        "label": "Channel configuration",
+        "status": "GOOD",
+        "displayValue": "Stereo",
+        "message": "Standard podcast channel configuration.",
+        "fixable": false
+      },
+      {
+        "id": "bitrate",
+        "label": "Bitrate",
+        "status": "GOOD",
+        "displayValue": "192 kbps",
+        "message": "Appropriate stereo delivery bitrate.",
+        "fixable": false
+      }
+    ]
+  },
+  "verificationPassed": true,
+  "transcription": {
+    "requested": true,
+    "status": "SUCCESS",
+    "engine": "whisper.cpp",
+    "model": "small",
+    "detectedLanguage": "en",
+    "outputFile": "Allusionist+HSBC+PRE+2019-07-12_transcript.txt"
+  }
+}

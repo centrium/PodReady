@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -7,6 +7,12 @@ import type {
   ShowBaseline,
   BatchPublishingJob,
   BatchPublishingProgressPayload,
+  ShowSummary,
+  Show,
+  AddBatchEpisodesResult,
+  MoveEpisodesResult,
+  BatchAnalysisJob,
+  BatchProgressPayload,
 } from "@podready/domain";
 import { formatAudioDuration } from "@podready/domain";
 import { CatalogueEpisodeModal } from "./CatalogueEpisodeModal";
@@ -35,14 +41,17 @@ export function ShowDetail({
   const [baseline, setBaseline] = useState<ShowBaseline | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Sorting & Filtering
   const [sortField, setSortField] = useState<SortField>("ANALYSED_AT");
   const [sortAsc, setSortAsc] = useState<boolean>(false); // default newest first
   const [filter, setFilter] = useState<FilterStatus>("ALL");
 
-  // Selection state for Stage 5E Batch Publishing
+  // Selection state
   const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<Set<string>>(new Set());
+
+  // Publishing State
   const [isPreflightOpen, setIsPreflightOpen] = useState<boolean>(false);
   const [publishingJob, setPublishingJob] = useState<BatchPublishingJob | null>(null);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
@@ -55,12 +64,46 @@ export function ShowDetail({
   const [editDescription, setEditDescription] = useState<string>("");
   const [isSavingShow, setIsSavingShow] = useState<boolean>(false);
 
-  // Deletion Confirmation Modal
+  // Deletion Confirmation Modal (Show)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
   const [isDeletingShow, setIsDeletingShow] = useState<boolean>(false);
 
   // Episode Inspection Modal
   const [selectedEpisode, setSelectedEpisode] = useState<CatalogueEpisode | null>(null);
+
+  // Active open row menu (by episode id)
+  const [openRowMenuId, setOpenRowMenuId] = useState<string | null>(null);
+
+  // Adding Episodes Direct Flow State
+  const [isAddingEpisodes, setIsAddingEpisodes] = useState<boolean>(false);
+  const [addingStatusText, setAddingStatusText] = useState<string | null>(null);
+
+  // In-Place Re-analysing State
+  const [reanalysingEpId, setReanalysingEpId] = useState<string | null>(null);
+
+  // Move Episodes Modal State
+  const [isMoveModalOpen, setIsMoveModalOpen] = useState<boolean>(false);
+  const [episodesToMove, setEpisodesToMove] = useState<CatalogueEpisode[]>([]);
+  const [availableShows, setAvailableShows] = useState<ShowSummary[]>([]);
+  const [moveTargetShowId, setMoveTargetShowId] = useState<string>("");
+  const [moveNewShowName, setMoveNewShowName] = useState<string>("");
+  const [moveNewShowDesc, setMoveNewShowDesc] = useState<string>("");
+  const [isMoving, setIsMoving] = useState<boolean>(false);
+
+  // Remove Episodes Confirmation Modal State
+  const [isRemoveConfirmOpen, setIsRemoveConfirmOpen] = useState<boolean>(false);
+  const [episodesToRemove, setEpisodesToRemove] = useState<CatalogueEpisode[]>([]);
+  const [isRemoving, setIsRemoving] = useState<boolean>(false);
+
+  // Ref for closing row menu on outside click
+  const menuContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((current) => (current === msg ? null : current));
+    }, 5000);
+  };
 
   const loadShowData = useCallback(async () => {
     setIsLoading(true);
@@ -84,7 +127,19 @@ export function ShowDetail({
 
   useEffect(() => {
     loadShowData();
+    setSelectedEpisodeIds(new Set());
   }, [loadShowData]);
+
+  // Click outside to close row menu
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target as Node)) {
+        setOpenRowMenuId(null);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
 
   // Listen for batch publishing lifecycle events
   useEffect(() => {
@@ -143,6 +198,213 @@ export function ShowDetail({
     };
   }, [loadShowData]);
 
+  // Add Episodes from disk directly into this Show
+  const handleAddEpisodesFromDisk = async () => {
+    try {
+      const paths = await invoke<string[]>("select_files_cmd");
+      if (!paths || paths.length === 0) return;
+
+      setIsAddingEpisodes(true);
+      setAddingStatusText(`Analysing ${paths.length} ${paths.length === 1 ? "file" : "files"}…`);
+
+      // Start batch analysis
+      const job = await invoke<BatchAnalysisJob>("start_batch_analysis_cmd", { paths });
+
+      // Listen for batch completion
+      const unlisten = await listen<BatchProgressPayload>("batch-complete", async (event) => {
+        if (event.payload.jobId === job.id) {
+          unlisten();
+          setAddingStatusText("Adding analysed episodes to catalogue…");
+          try {
+            const addRes = await invoke<AddBatchEpisodesResult>("add_batch_episodes_to_show_cmd", {
+              showId,
+              jobId: job.id,
+            });
+
+            const parts: string[] = [];
+            if (addRes.added > 0) parts.push(`${addRes.added} added`);
+            if (addRes.alreadyExists > 0) parts.push(`${addRes.alreadyExists} already in show`);
+            if (addRes.updated > 0) parts.push(`${addRes.updated} updated`);
+            if (addRes.skippedFailed > 0) parts.push(`${addRes.skippedFailed} failed`);
+
+            showToast(`Catalogue updated: ${parts.join(", ")}.`);
+            await loadShowData();
+          } catch (err: any) {
+            console.error("Failed to add batch to catalogue:", err);
+            setError(err.message || "Failed to add episodes to show catalogue.");
+          } finally {
+            setIsAddingEpisodes(false);
+            setAddingStatusText(null);
+          }
+        }
+      });
+    } catch (err: any) {
+      console.error("Failed to add episodes:", err);
+      setError(err.message || "Failed to add episodes.");
+      setIsAddingEpisodes(false);
+      setAddingStatusText(null);
+    }
+  };
+
+  // Direct In-Place Re-analysis
+  const handleDirectReanalyse = async (episodeId: string) => {
+    setReanalysingEpId(episodeId);
+    setOpenRowMenuId(null);
+    try {
+      const updated = await invoke<CatalogueEpisode>("reanalyse_catalogue_episode_cmd", {
+        id: episodeId,
+      });
+      showToast(`"${updated.filename}" re-analysed and updated.`);
+      await loadShowData();
+      if (selectedEpisode && selectedEpisode.id === episodeId) {
+        setSelectedEpisode(updated);
+      }
+    } catch (err: any) {
+      console.error("Re-analysis failed:", err);
+      setError(err.message || "Re-analysis failed.");
+    } finally {
+      setReanalysingEpId(null);
+    }
+  };
+
+  // Locate Missing File
+  const handleLocateMissingFile = async (ep: CatalogueEpisode) => {
+    setOpenRowMenuId(null);
+    try {
+      const paths = await invoke<string[]>("select_files_cmd");
+      if (!paths || paths.length === 0) return;
+
+      const newPath = paths[0];
+      setReanalysingEpId(ep.id);
+      const updated = await invoke<CatalogueEpisode>("relink_catalogue_episode_cmd", {
+        episodeId: ep.id,
+        newSourcePath: newPath,
+      });
+      showToast(`Source relinked and verified for "${updated.filename}".`);
+      await loadShowData();
+      if (selectedEpisode && selectedEpisode.id === ep.id) {
+        setSelectedEpisode(updated);
+      }
+    } catch (err: any) {
+      console.error("Relink failed:", err);
+      setError(err.message || "Failed to relink missing source file.");
+    } finally {
+      setReanalysingEpId(null);
+    }
+  };
+
+  // Open Move Modal
+  const handleOpenMoveModal = async (episodes: CatalogueEpisode[]) => {
+    setOpenRowMenuId(null);
+    setEpisodesToMove(episodes);
+    setIsMoving(false);
+    setMoveNewShowName("");
+    setMoveNewShowDesc("");
+    try {
+      const allShows = await invoke<ShowSummary[]>("get_shows_cmd");
+      const otherShows = allShows.filter((s) => s.id !== showId);
+      setAvailableShows(otherShows);
+      if (otherShows.length > 0) {
+        setMoveTargetShowId(otherShows[0].id);
+      } else {
+        setMoveTargetShowId("NEW");
+      }
+      setIsMoveModalOpen(true);
+    } catch (err: any) {
+      console.error("Failed to load shows for move:", err);
+      setError(err.message || "Failed to load shows list.");
+    }
+  };
+
+  // Execute Move Episodes
+  const handleExecuteMove = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (episodesToMove.length === 0) return;
+
+    setIsMoving(true);
+    try {
+      let targetId = moveTargetShowId;
+
+      // If creating new show
+      if (targetId === "NEW") {
+        if (!moveNewShowName.trim()) {
+          setError("Please enter a name for the new show.");
+          setIsMoving(false);
+          return;
+        }
+        const created = await invoke<Show>("create_show_cmd", {
+          input: {
+            name: moveNewShowName.trim(),
+            description: moveNewShowDesc.trim() || undefined,
+          },
+        });
+        targetId = created.id;
+      }
+
+      const episodeIds = episodesToMove.map((ep) => ep.id);
+      const res = await invoke<MoveEpisodesResult>("move_catalogue_episodes_cmd", {
+        episodeIds,
+        targetShowId: targetId,
+      });
+
+      // Remove moved episodes from selection
+      setSelectedEpisodeIds((prev) => {
+        const next = new Set(prev);
+        for (const id of episodeIds) next.delete(id);
+        return next;
+      });
+
+      setIsMoveModalOpen(false);
+      setSelectedEpisode(null);
+      showToast(
+        `${res.moved} ${res.moved === 1 ? "episode" : "episodes"} moved to "${res.targetShowName}".`
+      );
+      await loadShowData();
+    } catch (err: any) {
+      console.error("Move failed:", err);
+      setError(err.message || "Failed to move episode(s).");
+    } finally {
+      setIsMoving(false);
+    }
+  };
+
+  // Open Remove Confirmation
+  const handleOpenRemoveConfirm = (episodes: CatalogueEpisode[]) => {
+    setOpenRowMenuId(null);
+    setEpisodesToRemove(episodes);
+    setIsRemoveConfirmOpen(true);
+  };
+
+  // Execute Remove Episodes
+  const handleExecuteRemove = async () => {
+    if (episodesToRemove.length === 0) return;
+    setIsRemoving(true);
+    try {
+      const episodeIds = episodesToRemove.map((ep) => ep.id);
+      await invoke("delete_catalogue_episodes_cmd", { episodeIds });
+
+      setSelectedEpisodeIds((prev) => {
+        const next = new Set(prev);
+        for (const id of episodeIds) next.delete(id);
+        return next;
+      });
+
+      setIsRemoveConfirmOpen(false);
+      setSelectedEpisode(null);
+      showToast(
+        `Removed ${episodesToRemove.length} ${
+          episodesToRemove.length === 1 ? "episode" : "episodes"
+        } from show catalogue.`
+      );
+      await loadShowData();
+    } catch (err: any) {
+      console.error("Failed to remove episode(s):", err);
+      setError(err.message || "Failed to remove episode(s) from show.");
+    } finally {
+      setIsRemoving(false);
+    }
+  };
+
   const handleSaveShow = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editName.trim()) return;
@@ -171,6 +433,7 @@ export function ShowDetail({
           : null
       );
       setIsEditing(false);
+      showToast("Show details updated.");
     } catch (err: any) {
       console.error("Failed to update show:", err);
       setError(err.message || "Failed to save show changes.");
@@ -189,22 +452,6 @@ export function ShowDetail({
       console.error("Failed to delete show:", err);
       setError(err.message || "Failed to delete show.");
       setIsDeletingShow(false);
-    }
-  };
-
-  const handleDeleteEpisode = async (episodeId: string) => {
-    try {
-      await invoke("delete_catalogue_episode_cmd", { id: episodeId });
-      setSelectedEpisode(null);
-      setSelectedEpisodeIds((prev) => {
-        const next = new Set(prev);
-        next.delete(episodeId);
-        return next;
-      });
-      loadShowData();
-    } catch (err: any) {
-      console.error("Failed to delete episode:", err);
-      setError(err.message || "Failed to delete episode from show.");
     }
   };
 
@@ -268,7 +515,8 @@ export function ShowDetail({
       if (filter === "ALL") return true;
       if (filter === "MISSING") return ep.sourceAvailability === "MISSING";
       if (filter === "CHANGED") return ep.sourceAvailability === "CHANGED";
-      if (filter === "UNKNOWN") return !["READY", "ATTENTION", "NEEDS_ATTENTION"].includes(ep.overallAssessmentStatus);
+      if (filter === "UNKNOWN")
+        return !["READY", "ATTENTION", "NEEDS_ATTENTION"].includes(ep.overallAssessmentStatus);
       return ep.overallAssessmentStatus === filter;
     });
   }, [data, filter]);
@@ -384,9 +632,21 @@ export function ShowDetail({
   };
 
   const handlePublishSingleEpisode = (ep: CatalogueEpisode) => {
+    setOpenRowMenuId(null);
     setSelectedEpisodeIds(new Set([ep.id]));
     setIsPreflightOpen(true);
     setSelectedEpisode(null);
+  };
+
+  const handleMakeWholeShowPodReady = () => {
+    if (!data) return;
+    const eligible = data.episodes.filter((e) => e.sourceAvailability !== "MISSING");
+    if (eligible.length === 0) {
+      setError("No available episodes to publish in this show.");
+      return;
+    }
+    setSelectedEpisodeIds(new Set(eligible.map((e) => e.id)));
+    setIsPreflightOpen(true);
   };
 
   if (isLoading) {
@@ -397,11 +657,11 @@ export function ShowDetail({
     );
   }
 
-  if (error || !data) {
+  if (error && !data) {
     return (
       <div className="w-full max-w-4xl bg-white border border-gray-200 rounded-2xl p-8 space-y-4 shadow-xs">
         <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-sm font-medium">
-          {error || "Show not found."}
+          {error}
         </div>
         <button
           onClick={onBack}
@@ -413,10 +673,14 @@ export function ShowDetail({
     );
   }
 
+  if (!data) return null;
+
   const { show, episodes } = data;
   const readyCount = episodes.filter((e) => e.overallAssessmentStatus === "READY").length;
   const attentionCount = episodes.filter((e) => e.overallAssessmentStatus === "ATTENTION").length;
-  const needsAttentionCount = episodes.filter((e) => e.overallAssessmentStatus === "NEEDS_ATTENTION").length;
+  const needsAttentionCount = episodes.filter(
+    (e) => e.overallAssessmentStatus === "NEEDS_ATTENTION"
+  ).length;
   const unknownCount = episodes.filter(
     (e) => !["READY", "ATTENTION", "NEEDS_ATTENTION"].includes(e.overallAssessmentStatus)
   ).length;
@@ -427,7 +691,53 @@ export function ShowDetail({
     sortedEpisodes.length > 0 && sortedEpisodes.every((e) => selectedEpisodeIds.has(e.id));
 
   return (
-    <div className="w-full max-w-4xl bg-white border border-gray-200 rounded-2xl shadow-sm p-8 flex flex-col space-y-6">
+    <div
+      ref={menuContainerRef}
+      className="w-full max-w-4xl bg-white border border-gray-200 rounded-2xl shadow-sm p-8 flex flex-col space-y-6 relative"
+    >
+      {/* Toast Feedback Notification */}
+      {toastMessage && (
+        <div className="fixed top-16 right-8 z-50 p-4 max-w-sm bg-gray-900 text-white text-xs font-medium rounded-xl shadow-xl flex items-center justify-between space-x-3 transition-all animate-in fade-in slide-in-from-top-2">
+          <span>{toastMessage}</span>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="text-gray-400 hover:text-white p-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Adding Episodes Progress Banner */}
+      {isAddingEpisodes && (
+        <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between text-xs text-indigo-950 shadow-xs animate-pulse">
+          <div className="flex items-center space-x-2.5">
+            <svg
+              className="animate-spin h-4 w-4 text-indigo-600"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            <span className="font-semibold">{addingStatusText || "Adding episodes to show…"}</span>
+          </div>
+          <span className="text-[11px] text-indigo-700">Analysing using bundled engine</span>
+        </div>
+      )}
+
       {/* Top Navigation & Actions */}
       <div className="flex items-center justify-between border-b border-gray-100 pb-4">
         <button
@@ -441,6 +751,22 @@ export function ShowDetail({
         </button>
 
         <div className="flex items-center space-x-2">
+          <button
+            onClick={handleAddEpisodesFromDisk}
+            disabled={isAddingEpisodes}
+            className="px-3.5 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs flex items-center space-x-1.5 disabled:opacity-50"
+          >
+            <span>+ Add Episodes</span>
+          </button>
+          {episodes.length > 0 && (
+            <button
+              onClick={handleMakeWholeShowPodReady}
+              className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
+              title="Publish all eligible episodes in this show"
+            >
+              Make Show PodReady
+            </button>
+          )}
           {!isEditing && (
             <button
               onClick={() => setIsEditing(true)}
@@ -613,12 +939,13 @@ export function ShowDetail({
         </div>
       </div>
 
-      {/* Stage 5E: Selection Action Bar */}
+      {/* Selection Action Bar (Multi-Management) */}
       {selectedEpisodeIds.size > 0 && (
         <div className="flex items-center justify-between p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-xl transition-all">
           <div className="flex items-center space-x-3 text-xs">
             <span className="font-bold text-indigo-950">
-              {selectedEpisodeIds.size} {selectedEpisodeIds.size === 1 ? "episode selected" : "episodes selected"}
+              {selectedEpisodeIds.size}{" "}
+              {selectedEpisodeIds.size === 1 ? "episode selected" : "episodes selected"}
             </span>
             <button
               onClick={handleSelectAllVisible}
@@ -634,15 +961,29 @@ export function ShowDetail({
             </button>
           </div>
 
-          <button
-            onClick={() => setIsPreflightOpen(true)}
-            className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs flex items-center space-x-1.5 cursor-pointer"
-          >
-            <span>Make PodReady</span>
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => handleOpenMoveModal(selectedEpisodesList)}
+              className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors shadow-2xs"
+            >
+              Move to Show…
+            </button>
+            <button
+              onClick={() => handleOpenRemoveConfirm(selectedEpisodesList)}
+              className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-white hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors shadow-2xs"
+            >
+              Remove from Show
+            </button>
+            <button
+              onClick={() => setIsPreflightOpen(true)}
+              className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs flex items-center space-x-1.5 cursor-pointer"
+            >
+              <span>Make PodReady</span>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
+            </button>
+          </div>
         </div>
       )}
 
@@ -668,7 +1009,8 @@ export function ShowDetail({
           <div className="col-span-2 text-center">Duration</div>
           <div className="col-span-2 text-center">Loudness</div>
           <div className="col-span-2 text-center">True Peak</div>
-          <div className="col-span-2 text-right">Status</div>
+          <div className="col-span-1 text-center">Status</div>
+          <div className="col-span-1 text-right">Actions</div>
         </div>
 
         <div className="divide-y divide-gray-100 max-h-[480px] overflow-y-auto">
@@ -676,12 +1018,14 @@ export function ShowDetail({
             const isMissing = ep.sourceAvailability === "MISSING";
             const isChanged = ep.sourceAvailability === "CHANGED";
             const isSelected = selectedEpisodeIds.has(ep.id);
+            const isReanalysing = reanalysingEpId === ep.id;
+            const isMenuOpen = openRowMenuId === ep.id;
 
             return (
               <div
                 key={ep.id}
                 onClick={() => setSelectedEpisode(ep)}
-                className={`grid grid-cols-12 items-center px-4 py-3.5 transition-colors cursor-pointer ${
+                className={`grid grid-cols-12 items-center px-4 py-3.5 transition-colors cursor-pointer relative ${
                   isSelected
                     ? "bg-indigo-50/50 hover:bg-indigo-50/70"
                     : "hover:bg-indigo-50/30"
@@ -740,18 +1084,151 @@ export function ShowDetail({
                 </div>
 
                 {/* Status Badge */}
-                <div className="col-span-2 text-right">
+                <div className="col-span-1 text-center">
                   {getStatusBadge(ep.overallAssessmentStatus)}
+                </div>
+
+                {/* Row Actions Menu */}
+                <div className="col-span-1 text-right relative">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenRowMenuId(isMenuOpen ? null : ep.id);
+                    }}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                    aria-label={`Actions for ${ep.filename}`}
+                  >
+                    {isReanalysing ? (
+                      <svg
+                        className="animate-spin h-4 w-4 text-indigo-600"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        />
+                      </svg>
+                    ) : (
+                      <span className="font-bold text-sm tracking-widest leading-none">⋯</span>
+                    )}
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {isMenuOpen && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute right-0 top-8 z-30 w-48 bg-white border border-gray-200 rounded-xl shadow-xl py-1 text-left text-xs text-gray-700 animate-in fade-in zoom-in-95 duration-100"
+                    >
+                      <button
+                        onClick={() => {
+                          setOpenRowMenuId(null);
+                          setSelectedEpisode(ep);
+                        }}
+                        className="w-full px-3.5 py-2 text-left hover:bg-gray-50 flex items-center space-x-2 font-medium"
+                      >
+                        <span>🔍</span>
+                        <span>View details</span>
+                      </button>
+
+                      {!isMissing && (
+                        <button
+                          onClick={() => handlePublishSingleEpisode(ep)}
+                          className="w-full px-3.5 py-2 text-left hover:bg-gray-50 flex items-center space-x-2 font-semibold text-indigo-600"
+                        >
+                          <span>🚀</span>
+                          <span>Make PodReady</span>
+                        </button>
+                      )}
+
+                      {!isMissing && (
+                        <button
+                          onClick={() => handleDirectReanalyse(ep.id)}
+                          className="w-full px-3.5 py-2 text-left hover:bg-gray-50 flex items-center space-x-2 font-medium text-gray-700"
+                        >
+                          <span>🔄</span>
+                          <span>Re-analyse in place</span>
+                        </button>
+                      )}
+
+                      {!isMissing && (
+                        <button
+                          onClick={() => {
+                            setOpenRowMenuId(null);
+                            onOpenInWorkspace(ep.sourcePath);
+                          }}
+                          className="w-full px-3.5 py-2 text-left hover:bg-gray-50 flex items-center space-x-2 font-medium"
+                        >
+                          <span>🎛️</span>
+                          <span>Open in Workspace</span>
+                        </button>
+                      )}
+
+                      {isMissing && (
+                        <button
+                          onClick={() => handleLocateMissingFile(ep)}
+                          className="w-full px-3.5 py-2 text-left hover:bg-gray-50 flex items-center space-x-2 font-medium text-amber-700"
+                        >
+                          <span>📁</span>
+                          <span>Locate Missing File…</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleOpenMoveModal([ep])}
+                        className="w-full px-3.5 py-2 text-left hover:bg-gray-50 flex items-center space-x-2 font-medium"
+                      >
+                        <span>📦</span>
+                        <span>Move to Show…</span>
+                      </button>
+
+                      <div className="border-t border-gray-100 my-1" />
+
+                      <button
+                        onClick={() => handleOpenRemoveConfirm([ep])}
+                        className="w-full px-3.5 py-2 text-left hover:bg-rose-50 flex items-center space-x-2 font-semibold text-rose-600"
+                      >
+                        <span>🗑️</span>
+                        <span>Remove from Show</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })}
 
           {sortedEpisodes.length === 0 && (
-            <div className="p-8 text-center text-sm text-gray-500">
-              {episodes.length === 0
-                ? "No episodes catalogued yet in this show. Analyse episodes and click 'Add to Show' to catalogue them."
-                : "No episodes match the selected filter."}
+            <div className="p-12 text-center text-sm text-gray-500 space-y-3">
+              {episodes.length === 0 ? (
+                <div className="space-y-3">
+                  <p className="text-gray-800 font-semibold text-base">No episodes yet</p>
+                  <p className="text-xs text-gray-500 max-w-sm mx-auto leading-relaxed">
+                    Add a few previous episodes and PodReady can establish what this Show normally
+                    sounds like.
+                  </p>
+                  <button
+                    onClick={handleAddEpisodesFromDisk}
+                    disabled={isAddingEpisodes}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors shadow-xs"
+                  >
+                    + Add Episodes
+                  </button>
+                </div>
+              ) : (
+                <p>No episodes match the selected filter.</p>
+              )}
             </div>
           )}
         </div>
@@ -764,12 +1241,15 @@ export function ShowDetail({
           isOpen={true}
           onClose={() => setSelectedEpisode(null)}
           onOpenInWorkspace={onOpenInWorkspace}
-          onDeleteEpisode={handleDeleteEpisode}
+          onDeleteEpisode={() => handleOpenRemoveConfirm([selectedEpisode])}
           onMakePodReady={handlePublishSingleEpisode}
+          onMoveEpisode={() => handleOpenMoveModal([selectedEpisode])}
+          onReanalyseEpisode={handleDirectReanalyse}
+          onLocateFile={() => handleLocateMissingFile(selectedEpisode)}
         />
       )}
 
-      {/* Stage 5E: Batch Publishing Preflight Modal */}
+      {/* Batch Publishing Preflight Modal */}
       <BatchPublishingPreflightModal
         isOpen={isPreflightOpen}
         showName={show.name}
@@ -778,7 +1258,7 @@ export function ShowDetail({
         onStartPublishing={handleStartPublishing}
       />
 
-      {/* Stage 5E: Batch Publishing Progress Modal */}
+      {/* Batch Publishing Progress Modal */}
       {isPublishing && publishingJob && (
         <BatchPublishingProgress
           job={publishingJob}
@@ -787,7 +1267,7 @@ export function ShowDetail({
         />
       )}
 
-      {/* Stage 5E: Batch Publishing Results Modal */}
+      {/* Batch Publishing Results Modal */}
       {showPublishingResults && publishingJob && (
         <BatchPublishingResults
           job={publishingJob}
@@ -805,18 +1285,152 @@ export function ShowDetail({
         />
       )}
 
+      {/* Remove Episode(s) Confirmation Dialog */}
+      {isRemoveConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <h3 className="text-base font-bold text-gray-900">
+              {episodesToRemove.length === 1
+                ? `Remove "${episodesToRemove[0].filename}" from ${show.name}?`
+                : `Remove ${episodesToRemove.length} episodes from ${show.name}?`}
+            </h3>
+            <p className="text-xs text-gray-600 leading-relaxed">
+              This removes the {episodesToRemove.length === 1 ? "episode" : "episodes"} from
+              PodReady's catalogue record.
+            </p>
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center space-x-2">
+              <span>🛡️</span>
+              <span>
+                <strong>Your media files are safe:</strong> Original audio files will NEVER be
+                modified or deleted.
+              </span>
+            </div>
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsRemoveConfirmOpen(false)}
+                disabled={isRemoving}
+                className="px-4 py-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteRemove}
+                disabled={isRemoving}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors shadow-xs disabled:opacity-50"
+              >
+                {isRemoving ? "Removing…" : "Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move Episode(s) Modal */}
+      {isMoveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="text-base font-bold text-gray-900">
+                Move {episodesToMove.length === 1 ? "Episode" : `${episodesToMove.length} Episodes`} to Show
+              </h3>
+              <button
+                onClick={() => setIsMoveModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteMove} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-gray-700">Destination Show</label>
+                <select
+                  value={moveTargetShowId}
+                  onChange={(e) => setMoveTargetShowId(e.target.value)}
+                  className="w-full bg-white border border-gray-300 text-gray-900 text-xs font-medium rounded-lg p-2.5 focus:ring-1 focus:ring-indigo-500"
+                >
+                  {availableShows.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.episodeCount} eps)
+                    </option>
+                  ))}
+                  <option value="NEW">+ Create New Show…</option>
+                </select>
+              </div>
+
+              {moveTargetShowId === "NEW" && (
+                <div className="space-y-3 p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-bold text-gray-700">
+                      New Show Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={moveNewShowName}
+                      onChange={(e) => setMoveNewShowName(e.target.value)}
+                      placeholder="e.g. My Next Podcast"
+                      className="w-full bg-white border border-gray-300 text-gray-900 text-xs rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-bold text-gray-700">
+                      Description (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={moveNewShowDesc}
+                      onChange={(e) => setMoveNewShowDesc(e.target.value)}
+                      placeholder="Show topic"
+                      className="w-full bg-white border border-gray-300 text-gray-900 text-xs rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center space-x-2">
+                <span>ℹ️</span>
+                <span>Moving alters catalogue ownership only. Source audio files on disk remain untouched.</span>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsMoveModalOpen(false)}
+                  disabled={isMoving}
+                  className="px-4 py-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isMoving}
+                  className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs disabled:opacity-50"
+                >
+                  {isMoving ? "Moving…" : "Move"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Delete Show Confirmation Dialog */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
           <div className="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-md w-full p-6 space-y-4">
             <h3 className="text-base font-bold text-gray-900">Delete Show Catalogue?</h3>
             <p className="text-xs text-gray-600 leading-relaxed">
-              This will remove <strong className="text-gray-900">{show.name}</strong> and its {episodes.length} catalogued records from PodReady.
+              This will remove <strong className="text-gray-900">{show.name}</strong> and its{" "}
+              {episodes.length} catalogued records from PodReady.
             </p>
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center space-x-2">
               <span>🛡️</span>
               <span>
-                <strong>Your media files are safe:</strong> Original audio files will NEVER be modified or deleted.
+                <strong>Your media files are safe:</strong> Original audio files will NEVER be
+                modified or deleted.
               </span>
             </div>
             <div className="flex items-center justify-end space-x-3 pt-2">

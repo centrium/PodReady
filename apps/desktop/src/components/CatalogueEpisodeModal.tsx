@@ -17,6 +17,9 @@ interface CatalogueEpisodeModalProps {
   onOpenInWorkspace?: (sourcePath: string) => void;
   onDeleteEpisode?: (episodeId: string) => void;
   onMakePodReady?: (episode: CatalogueEpisode) => void;
+  onMoveEpisode?: (episode: CatalogueEpisode) => void;
+  onReanalyseEpisode?: (episodeId: string) => void;
+  onLocateFile?: (episode: CatalogueEpisode) => void;
 }
 
 export function CatalogueEpisodeModal({
@@ -26,6 +29,9 @@ export function CatalogueEpisodeModal({
   onOpenInWorkspace,
   onDeleteEpisode,
   onMakePodReady,
+  onMoveEpisode,
+  onReanalyseEpisode,
+  onLocateFile,
 }: CatalogueEpisodeModalProps) {
   const [showCheck, setShowCheck] = useState<ShowCheck | null>(null);
   const [isLoadingShowCheck, setIsLoadingShowCheck] = useState<boolean>(false);
@@ -349,29 +355,58 @@ export function CatalogueEpisodeModal({
         )}
 
         {/* Action Footer */}
-        <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-          {onDeleteEpisode && (
-            <button
-              onClick={() => onDeleteEpisode(episode.id)}
-              className="text-xs font-semibold text-rose-600 hover:text-rose-700 transition-colors px-3 py-2 rounded-lg hover:bg-rose-50"
-            >
-              Remove from Show
-            </button>
-          )}
+        <div className="flex items-center justify-between pt-4 border-t border-gray-100 flex-wrap gap-2">
+          <div className="flex items-center space-x-2">
+            {onDeleteEpisode && (
+              <button
+                onClick={() => onDeleteEpisode(episode.id)}
+                className="text-xs font-semibold text-rose-600 hover:text-rose-700 transition-colors px-3 py-2 rounded-lg hover:bg-rose-50"
+              >
+                Remove from Show
+              </button>
+            )}
+            {onMoveEpisode && (
+              <button
+                onClick={() => onMoveEpisode(episode)}
+                className="text-xs font-semibold text-gray-700 hover:text-gray-900 transition-colors px-3 py-2 rounded-lg hover:bg-gray-100"
+              >
+                Move to Show…
+              </button>
+            )}
+          </div>
 
-          <div className="flex items-center space-x-3 ml-auto">
+          <div className="flex items-center space-x-2 ml-auto">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              className="px-3.5 py-2 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
             >
               Close
             </button>
+            {isMissing && onLocateFile && (
+              <button
+                onClick={() => onLocateFile(episode)}
+                className="px-3.5 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors flex items-center space-x-1.5"
+              >
+                <span>📁</span>
+                <span>Locate Missing File…</span>
+              </button>
+            )}
+            {isChanged && onReanalyseEpisode && (
+              <button
+                onClick={() => onReanalyseEpisode(episode.id)}
+                className="px-3.5 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors flex items-center space-x-1.5"
+              >
+                <span>🔄</span>
+                <span>Re-analyse in place</span>
+              </button>
+            )}
             {!isMissing && onOpenInWorkspace && (
               <button
                 onClick={() => onOpenInWorkspace(episode.sourcePath)}
-                className="px-4 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center space-x-1.5"
+                className="px-3.5 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center space-x-1.5"
               >
-                <span>{isChanged ? "Re-analyse in Workspace" : "Open in Workspace"}</span>
+                <span>🎛️</span>
+                <span>Open in Workspace</span>
               </button>
             )}
             {!isMissing && onMakePodReady && (

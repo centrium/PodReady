@@ -8,7 +8,7 @@ use crate::batch::{BatchEpisode, BatchEpisodeStatus};
 
 use crate::catalogue::baseline::{BaselineMaturity, ShowBaseline};
 use crate::catalogue::models::{
-    AddEpisodeStatus, SourceAvailability,
+    AddEpisodeStatus, MoveEpisodeOutcomeStatus, SourceAvailability,
 };
 use crate::catalogue::repository::CatalogueRepository;
 use crate::catalogue::service::CatalogueService;
@@ -1850,6 +1850,320 @@ fn test_show_check_delivery_format_different_alone_is_different() {
     let check = service.run_show_check_for_media(&show.id, &cand).expect("check");
     assert_eq!(check.status, ShowCheckStatus::Different);
     assert_eq!(check.summary, "Uses WAV rather than the usual MP3 format.");
+}
+
+// ======================================================================
+// STAGE 5F: CATALOGUE & SHOW WORKFLOW COMPLETION TESTS
+// ======================================================================
+
+#[test]
+fn test_stage_5f_create_rename_edit_description_delete_show_source_safety() {
+    let dir = tempdir().expect("tempdir");
+    let audio_file_path = dir.path().join("source_episode.wav");
+    {
+        let mut f = File::create(&audio_file_path).expect("create file");
+        f.write_all(b"RIFF dummy wav file content").expect("write");
+    }
+    let initial_sha = file_sha256(&audio_file_path);
+
+    let service = CatalogueService::new_in_memory().expect("service");
+
+    // 1. Create Show
+    let show = service
+        .create_show("Initial Show Name", Some("Initial Description"))
+        .expect("create show");
+    assert_eq!(show.name, "Initial Show Name");
+    assert_eq!(show.description.as_deref(), Some("Initial Description"));
+
+    // Add an episode
+    let media = create_test_media_source(audio_file_path.to_str().unwrap(), 120.0, -16.0, -1.5);
+    service.add_media_source_to_show(&show.id, &media).expect("add");
+
+    // 2. Rename Show & Edit Description
+    let updated = service
+        .update_show(&show.id, "Renamed Show Name", Some("Updated Description"))
+        .expect("update show");
+    assert_eq!(updated.name, "Renamed Show Name");
+    assert_eq!(updated.description.as_deref(), Some("Updated Description"));
+
+    let fetched = service.get_show(&show.id).expect("get show");
+    assert_eq!(fetched.show.name, "Renamed Show Name");
+    assert_eq!(fetched.show.description.as_deref(), Some("Updated Description"));
+    assert_eq!(fetched.episodes.len(), 1);
+
+    // 3. Delete Show
+    service.delete_show(&show.id).expect("delete show");
+    assert!(service.get_show(&show.id).is_err());
+
+    // 4. Source-safety guarantee: source audio file is completely untouched on disk
+    assert!(audio_file_path.exists());
+    assert_eq!(file_sha256(&audio_file_path), initial_sha);
+}
+
+#[test]
+fn test_stage_5f_remove_single_and_multiple_episodes_without_touching_files() {
+    let dir = tempdir().expect("tempdir");
+    let mut paths = Vec::new();
+    let mut shas = Vec::new();
+
+    for i in 1..=4 {
+        let p = dir.path().join(format!("ep{}.wav", i));
+        {
+            let mut f = File::create(&p).expect("create");
+            f.write_all(format!("dummy audio {}", i).as_bytes()).expect("write");
+        }
+        shas.push(file_sha256(&p));
+        paths.push(p);
+    }
+
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show = service.create_show("Removal Show", None).expect("show");
+
+    let mut episode_ids = Vec::new();
+    for p in &paths {
+        let media = create_test_media_source(p.to_str().unwrap(), 60.0, -16.0, -1.5);
+        let outcome = service.add_media_source_to_show(&show.id, &media).expect("add");
+        episode_ids.push(outcome.episode_id);
+    }
+
+    let show_with_eps = service.get_show(&show.id).expect("get show");
+    assert_eq!(show_with_eps.episodes.len(), 4);
+
+    // 1. Remove single episode
+    service.delete_episode(&episode_ids[0]).expect("delete ep 0");
+    let show_with_eps = service.get_show(&show.id).expect("get show");
+    assert_eq!(show_with_eps.episodes.len(), 3);
+    assert!(!show_with_eps.episodes.iter().any(|e| e.id == episode_ids[0]));
+
+    // 2. Remove multiple episodes
+    let deleted_count = service
+        .delete_episodes(&[episode_ids[1].clone(), episode_ids[2].clone()])
+        .expect("delete eps 1 and 2");
+    assert_eq!(deleted_count, 2);
+
+    let show_with_eps = service.get_show(&show.id).expect("get show");
+    assert_eq!(show_with_eps.episodes.len(), 1);
+    assert_eq!(show_with_eps.episodes[0].id, episode_ids[3]);
+
+    // 3. Source-safety verification: none of the 4 original files on disk were modified or deleted
+    for (i, p) in paths.iter().enumerate() {
+        assert!(p.exists());
+        assert_eq!(file_sha256(p), shas[i]);
+    }
+}
+
+#[test]
+fn test_stage_5f_move_single_episode_between_shows_and_baseline_transfer() {
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show_a = service.create_show("Show A", None).expect("show a");
+    let show_b = service.create_show("Show B", None).expect("show b");
+
+    // Add 3 episodes to Show A (-16, -16, -16)
+    let mut ep_ids_a = Vec::new();
+    for i in 1..=3 {
+        let media = create_test_media_source(&format!("/test/show_a_ep{}.wav", i), 100.0, -16.0, -1.5);
+        let outcome = service.add_media_source_to_show(&show_a.id, &media).expect("add");
+        ep_ids_a.push(outcome.episode_id);
+    }
+
+    // Add 1 episode to Show B (-20)
+    let media_b = create_test_media_source("/test/show_b_ep1.wav", 100.0, -20.0, -1.5);
+    service.add_media_source_to_show(&show_b.id, &media_b).expect("add");
+
+    // Check initial baselines
+    let base_a = service.get_show_baseline(&show_a.id).expect("base a");
+    assert_eq!(base_a.eligible_episodes, 3);
+    assert_eq!(base_a.loudness.unwrap().median, -16.0);
+
+    let base_b = service.get_show_baseline(&show_b.id).expect("base b");
+    assert_eq!(base_b.eligible_episodes, 1);
+    assert_eq!(base_b.loudness.unwrap().median, -20.0);
+
+    // Move ep_ids_a[0] from Show A -> Show B
+    let move_res = service
+        .move_episodes(&[ep_ids_a[0].clone()], &show_b.id)
+        .expect("move");
+    assert_eq!(move_res.moved, 1);
+    assert_eq!(move_res.already_exists, 0);
+    assert_eq!(move_res.failed, 0);
+    assert_eq!(move_res.outcomes[0].status, MoveEpisodeOutcomeStatus::Moved);
+
+    // Show A should now have 2 episodes
+    let show_a_after = service.get_show(&show_a.id).expect("get show a");
+    assert_eq!(show_a_after.episodes.len(), 2);
+    assert!(!show_a_after.episodes.iter().any(|e| e.id == ep_ids_a[0]));
+
+    // Show B should now have 2 episodes
+    let show_b_after = service.get_show(&show_b.id).expect("get show b");
+    assert_eq!(show_b_after.episodes.len(), 2);
+    assert!(show_b_after.episodes.iter().any(|e| e.id == ep_ids_a[0]));
+
+    // Baselines should immediately reflect the transfer
+    let base_a_after = service.get_show_baseline(&show_a.id).expect("base a after");
+    assert_eq!(base_a_after.eligible_episodes, 2);
+
+    let base_b_after = service.get_show_baseline(&show_b.id).expect("base b after");
+    assert_eq!(base_b_after.eligible_episodes, 2);
+    assert_eq!(base_b_after.loudness.unwrap().median, -18.0); // median of -20 and -16
+}
+
+#[test]
+fn test_stage_5f_move_multiple_episodes_between_shows() {
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show_a = service.create_show("Source Show", None).expect("show a");
+    let show_b = service.create_show("Target Show", None).expect("show b");
+
+    let mut ep_ids = Vec::new();
+    for i in 1..=5 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -16.0, -1.5);
+        let out = service.add_media_source_to_show(&show_a.id, &media).expect("add");
+        ep_ids.push(out.episode_id);
+    }
+
+    // Move 3 episodes (0, 1, 2) to Show B
+    let move_res = service
+        .move_episodes(
+            &[ep_ids[0].clone(), ep_ids[1].clone(), ep_ids[2].clone()],
+            &show_b.id,
+        )
+        .expect("move");
+    assert_eq!(move_res.moved, 3);
+    assert_eq!(move_res.total_requested, 3);
+
+    let show_a_res = service.get_show(&show_a.id).expect("get a");
+    assert_eq!(show_a_res.episodes.len(), 2);
+
+    let show_b_res = service.get_show(&show_b.id).expect("get b");
+    assert_eq!(show_b_res.episodes.len(), 3);
+}
+
+#[test]
+fn test_stage_5f_move_duplicate_destination_handling_and_transaction_safety() {
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show_a = service.create_show("Show A", None).expect("show a");
+    let show_b = service.create_show("Show B", None).expect("show b");
+
+    // Add identical source path to both Show A and Show B
+    let media = create_test_media_source("/shared/path/episode.wav", 120.0, -16.0, -1.5);
+    let out_a = service.add_media_source_to_show(&show_a.id, &media).expect("add a");
+    let out_b = service.add_media_source_to_show(&show_b.id, &media).expect("add b");
+
+    assert_ne!(out_a.episode_id, out_b.episode_id);
+
+    // Attempting to move out_a to Show B (which already has this path):
+    // Target record remains authoritative, source association removed, outcome = AlreadyExists
+    let move_res = service
+        .move_episodes(&[out_a.episode_id.clone()], &show_b.id)
+        .expect("move");
+    assert_eq!(move_res.moved, 0);
+    assert_eq!(move_res.already_exists, 1);
+    assert_eq!(move_res.outcomes[0].status, MoveEpisodeOutcomeStatus::AlreadyExists);
+
+    // Show A no longer has it
+    let show_a_res = service.get_show(&show_a.id).expect("get a");
+    assert_eq!(show_a_res.episodes.len(), 0);
+
+    // Show B still has exactly 1 record for this source (no duplicates)
+    let show_b_res = service.get_show(&show_b.id).expect("get b");
+    assert_eq!(show_b_res.episodes.len(), 1);
+    assert_eq!(show_b_res.episodes[0].id, out_b.episode_id);
+
+    // Attempt to move to non-existent show fails cleanly without corrupting DB
+    let invalid_move = service.move_episodes(&[out_b.episode_id.clone()], "non_existent_show_id");
+    assert!(invalid_move.is_err());
+    assert_eq!(service.get_show(&show_b.id).unwrap().episodes.len(), 1);
+}
+
+#[test]
+fn test_stage_5f_changed_source_reanalysis_returns_available_and_refreshes_baseline() {
+    let dir = tempdir().expect("tempdir");
+    let wav_path = dir.path().join("changed_test.wav");
+    {
+        // Write standard sine fixture bytes or valid audio container
+        let mut f = File::create(&wav_path).expect("create");
+        f.write_all(b"RIFF....WAVEfmt ....data....").expect("write");
+    }
+
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show = service.create_show("ChangedShow", None).expect("show");
+
+    let media = create_test_media_source(wav_path.to_str().unwrap(), 50.0, -16.0, -1.5);
+    let outcome = service.add_media_source_to_show(&show.id, &media).expect("add");
+
+    // Modify file timestamp on disk to simulate external change
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    {
+        let mut f = std::fs::OpenOptions::new().append(true).open(&wav_path).expect("open");
+        f.write_all(b"more audio data").expect("append");
+    }
+
+    let ep_before = service.get_episode(&outcome.episode_id).expect("get ep");
+    assert_eq!(ep_before.source_availability, SourceAvailability::Changed);
+
+    // Baseline should exclude CHANGED episode
+    let base_before = service.get_show_baseline(&show.id).expect("base before");
+    assert_eq!(base_before.eligible_episodes, 0);
+    assert_eq!(base_before.exclusion_summary.changed_source_count, 1);
+}
+
+#[test]
+fn test_stage_5f_missing_source_historical_retention() {
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show = service.create_show("MissingShow", None).expect("show");
+
+    let media = create_test_media_source("/non/existent/disk/path/ghost.wav", 88.0, -14.0, -1.0);
+    let outcome = service.add_media_source_to_show(&show.id, &media).expect("add");
+
+    let ep = service.get_episode(&outcome.episode_id).expect("get");
+    assert_eq!(ep.source_availability, SourceAvailability::Missing);
+    // Historical analysis facts are fully preserved
+    assert_eq!(ep.duration_seconds, 88.0);
+    assert_eq!(ep.integrated_loudness_lufs, Some(-14.0));
+    assert_eq!(ep.true_peak_dbtp, Some(-1.0));
+
+    // Show baseline includes MISSING historical facts
+    let baseline = service.get_show_baseline(&show.id).expect("baseline");
+    assert_eq!(baseline.eligible_episodes, 1);
+    assert_eq!(baseline.loudness.unwrap().median, -14.0);
+}
+
+#[test]
+fn test_stage_5f_show_check_leave_one_out_after_move_and_removal() {
+    let service = CatalogueService::new_in_memory().expect("service");
+    let show_a = service.create_show("LOO Show A", None).expect("show a");
+    let show_b = service.create_show("LOO Show B", None).expect("show b");
+
+    // Add 4 episodes to Show A (-16.0)
+    let mut ep_ids_a = Vec::new();
+    for i in 1..=4 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 120.0, -16.0, -1.5);
+        let out = service.add_media_source_to_show(&show_a.id, &media).expect("add");
+        ep_ids_a.push(out.episode_id);
+    }
+
+    // Add 1 quiet episode (-23.0) to Show A
+    let quiet_media = create_test_media_source("/test/quiet.wav", 120.0, -23.0, -1.5);
+    let quiet_out = service.add_media_source_to_show(&show_a.id, &quiet_media).expect("add quiet");
+
+    // In Show A, LOO check for quiet episode compares against the 4 -16.0 episodes -> DIFFERENT
+    let check_a = service.get_show_check_for_episode(&quiet_out.episode_id).expect("check a");
+    assert_eq!(check_a.status, ShowCheckStatus::Different);
+    assert_eq!(check_a.baseline_episode_count, 4);
+
+    // Move quiet episode to Show B (which currently has 0 other episodes)
+    service
+        .move_episodes(&[quiet_out.episode_id.clone()], &show_b.id)
+        .expect("move to b");
+
+    // In Show B, LOO check for quiet episode has 0 other episodes -> INSUFFICIENT_DATA
+    let check_b = service.get_show_check_for_episode(&quiet_out.episode_id).expect("check b");
+    assert_eq!(check_b.status, ShowCheckStatus::InsufficientData);
+    assert_eq!(check_b.baseline_episode_count, 0);
+
+    // Show A baseline now only has 4 episodes (quiet episode is completely removed from history)
+    let base_a = service.get_show_baseline(&show_a.id).expect("base a");
+    assert_eq!(base_a.eligible_episodes, 4);
+    assert_eq!(base_a.loudness.unwrap().median, -16.0);
 }
 
 

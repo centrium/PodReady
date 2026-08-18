@@ -367,6 +367,34 @@ export interface UpdateShowInput {
   description?: string;
 }
 
+// Stage 5F: Move and Relink Management Types
+
+export type MoveEpisodeOutcomeStatus = 'MOVED' | 'ALREADY_EXISTS' | 'FAILED';
+
+export interface MoveEpisodeOutcome {
+  episodeId: string;
+  filename: string;
+  status: MoveEpisodeOutcomeStatus;
+  message?: string;
+}
+
+export interface MoveEpisodesResult {
+  targetShowId: string;
+  targetShowName: string;
+  totalRequested: number;
+  moved: number;
+  alreadyExists: number;
+  failed: number;
+  outcomes: MoveEpisodeOutcome[];
+}
+
+export interface RelinkEpisodeOutcome {
+  episodeId: string;
+  newSourcePath: string;
+  success: boolean;
+  message?: string;
+}
+
 // Stage 5C: Show Baseline & Historical Characteristics
 
 export type BaselineMaturity = 'NO_DATA' | 'EARLY' | 'DEVELOPING' | 'ESTABLISHED';

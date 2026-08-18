@@ -1,0 +1,25 @@
+{
+  "podreadyVersion": "1.0.0",
+  "createdAt": "2026-01-01T00:00:00Z (timestamp: 1787082294)",
+  "showId": "show_fcced3feabc1408f877a37ac0da63472",
+  "showName": "The UberCast",
+  "destinationDirectory": "~/Desktop/PodReady_Export",
+  "summary": {
+    "total": 1,
+    "complete": 1,
+    "partial": 0,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "elapsedSeconds": 3.9
+  },
+  "episodes": [
+    {
+      "episodeId": "ep_16cdc989f2eb412184adb157809f1481",
+      "filename": "Allusionist+HSBC+PRE+2019-07-12.mp3",
+      "status": "COMPLETE",
+      "packageDirectory": "~/Desktop/PodReady_Export/Allusionist+HSBC+PRE+2019-07-12_PodReady",
+      "elapsedSeconds": 3.9
+    }
+  ]
+}

@@ -2,8 +2,8 @@ use tauri::State;
 use crate::batch::BatchManager;
 use crate::catalogue::baseline::ShowBaseline;
 use crate::catalogue::models::{
-    AddBatchEpisodesResult, AddEpisodeOutcome, CatalogueEpisode, CreateShowInput, Show,
-    ShowSummary, ShowWithEpisodes, UpdateShowInput,
+    AddBatchEpisodesResult, AddEpisodeOutcome, CatalogueEpisode, CreateShowInput, MoveEpisodesResult,
+    Show, ShowSummary, ShowWithEpisodes, UpdateShowInput,
 };
 use crate::catalogue::service::CatalogueService;
 use crate::catalogue::show_check::ShowCheck;
@@ -95,7 +95,6 @@ pub async fn add_batch_episodes_to_show_cmd(
     catalogue.add_batch_episodes_to_show(&show_id, &job.episodes)
 }
 
-
 #[tauri::command]
 pub async fn get_catalogue_episode_cmd(
     id: String,
@@ -110,5 +109,47 @@ pub async fn delete_catalogue_episode_cmd(
     catalogue: State<'_, CatalogueService>,
 ) -> Result<(), AppError> {
     catalogue.delete_episode(&id)
+}
+
+#[tauri::command]
+pub async fn delete_catalogue_episodes_cmd(
+    episode_ids: Vec<String>,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<usize, AppError> {
+    catalogue.delete_episodes(&episode_ids)
+}
+
+#[tauri::command]
+pub async fn move_catalogue_episodes_cmd(
+    episode_ids: Vec<String>,
+    target_show_id: String,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<MoveEpisodesResult, AppError> {
+    catalogue.move_episodes(&episode_ids, &target_show_id)
+}
+
+#[tauri::command]
+pub async fn reanalyse_catalogue_episode_cmd(
+    id: String,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<CatalogueEpisode, AppError> {
+    let catalogue = catalogue.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || catalogue.reanalyse_catalogue_episode(&id))
+        .await
+        .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
+}
+
+#[tauri::command]
+pub async fn relink_catalogue_episode_cmd(
+    episode_id: String,
+    new_source_path: String,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<CatalogueEpisode, AppError> {
+    let catalogue = catalogue.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        catalogue.relink_and_reanalyse_episode(&episode_id, &new_source_path)
+    })
+    .await
+    .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
 }
 

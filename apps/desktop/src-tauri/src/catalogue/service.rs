@@ -3,18 +3,19 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::assessment::engine::OverallStatus;
+use crate::assessment::engine::{assess_media, OverallStatus};
 use crate::assessment::Assessment;
 use crate::batch::{BatchEpisode, BatchEpisodeStatus};
 use crate::catalogue::baseline::{compute_show_baseline, ShowBaseline};
 use crate::catalogue::models::{
-    AddBatchEpisodesResult, AddEpisodeOutcome, AddEpisodeStatus, CatalogueEpisode, Show,
-    ShowSummary, ShowWithEpisodes, SourceAvailability,
+    AddBatchEpisodesResult, AddEpisodeOutcome, AddEpisodeStatus, CatalogueEpisode, MoveEpisodesResult,
+    Show, ShowSummary, ShowWithEpisodes, SourceAvailability,
 };
 use crate::catalogue::repository::CatalogueRepository;
 use crate::catalogue::show_check::{run_show_check, CandidateMeasurements, ShowCheck};
 use crate::error::AppError;
-use crate::media::ffprobe::{MediaFormat, MediaSource};
+use crate::media::analysis::analyse_audio;
+use crate::media::ffprobe::{inspect_media, MediaFormat, MediaSource};
 
 #[derive(Clone)]
 pub struct CatalogueService {
@@ -176,6 +177,150 @@ impl CatalogueService {
         })?;
 
         repo.delete_episode(id)
+    }
+
+    pub fn delete_episodes(&self, ids: &[String]) -> Result<usize, AppError> {
+        let mut repo = self.repo.lock().map_err(|e| {
+            AppError::SystemError(format!("Catalogue lock error: {}", e))
+        })?;
+
+        repo.delete_episodes(ids)
+    }
+
+    pub fn move_episodes(
+        &self,
+        episode_ids: &[String],
+        target_show_id: &str,
+    ) -> Result<MoveEpisodesResult, AppError> {
+        let now = Utc::now().to_rfc3339();
+        let mut repo = self.repo.lock().map_err(|e| {
+            AppError::SystemError(format!("Catalogue lock error: {}", e))
+        })?;
+
+        repo.move_episodes(episode_ids, target_show_id, &now)
+    }
+
+    pub fn reanalyse_catalogue_episode(&self, episode_id: &str) -> Result<CatalogueEpisode, AppError> {
+        let ep = self.get_episode(episode_id)?;
+
+        let source_path = Path::new(&ep.source_path);
+        if !source_path.exists() {
+            return Err(AppError::NotFound(format!(
+                "Source file '{}' does not exist on disk",
+                ep.source_path
+            )));
+        }
+
+        // Run inspection, audio analysis, and assessment
+        let inspected = inspect_media(&ep.source_path)?;
+        let measurements = analyse_audio(&ep.source_path, inspected.inspection.duration_seconds)?;
+        let assessment = assess_media(
+            &inspected.inspection,
+            Some(&measurements),
+            &inspected.format,
+            &inspected.codec,
+        );
+
+        let (file_size_bytes, source_modified_at) =
+            extract_source_metadata(&ep.source_path, inspected.inspection.file_size_bytes as i64);
+
+        self.add_or_update_episode_internal(
+            &ep.show_id,
+            &ep.source_path,
+            &inspected.filename,
+            file_size_bytes,
+            inspected.inspection.duration_seconds,
+            inspected.format,
+            &inspected.codec,
+            inspected.inspection.sample_rate,
+            inspected.inspection.channels as u16,
+            inspected.inspection.bitrate,
+            measurements.integrated_loudness_lufs,
+            measurements.true_peak_dbtp,
+            measurements.leading_silence_seconds,
+            measurements.trailing_silence_seconds,
+            format!("{:?}", measurements.clipping.evidence),
+            &assessment,
+            source_modified_at,
+        )?;
+
+        self.get_episode(episode_id)
+    }
+
+    pub fn relink_and_reanalyse_episode(
+        &self,
+        episode_id: &str,
+        new_source_path: &str,
+    ) -> Result<CatalogueEpisode, AppError> {
+        let ep = self.get_episode(episode_id)?;
+
+        let new_path = Path::new(new_source_path);
+        if !new_path.exists() {
+            return Err(AppError::NotFound(format!(
+                "Replacement source file '{}' does not exist on disk",
+                new_source_path
+            )));
+        }
+
+        // Run inspection, audio analysis, and assessment
+        let inspected = inspect_media(new_source_path)?;
+        let measurements = analyse_audio(new_source_path, inspected.inspection.duration_seconds)?;
+        let assessment = assess_media(
+            &inspected.inspection,
+            Some(&measurements),
+            &inspected.format,
+            &inspected.codec,
+        );
+
+        let (file_size_bytes, source_modified_at) =
+            extract_source_metadata(new_source_path, inspected.inspection.file_size_bytes as i64);
+
+        let now = Utc::now().to_rfc3339();
+        let assessment_json = serde_json::to_string(&assessment).ok();
+        let overall_assessment_status = match assessment.overall_status {
+            OverallStatus::Ready => "READY",
+            OverallStatus::Attention => "ATTENTION",
+            OverallStatus::NeedsAttention => "NEEDS_ATTENTION",
+        }
+        .to_string();
+
+        let updated_ep = CatalogueEpisode {
+            id: ep.id.clone(),
+            show_id: ep.show_id.clone(),
+            source_path: new_source_path.to_string(),
+            filename: inspected.filename,
+            file_size_bytes,
+            duration_seconds: inspected.inspection.duration_seconds,
+            format: inspected.format,
+            codec: inspected.codec,
+            sample_rate: inspected.inspection.sample_rate,
+            channels: inspected.inspection.channels as u16,
+            bitrate: inspected.inspection.bitrate,
+            integrated_loudness_lufs: measurements.integrated_loudness_lufs,
+            true_peak_dbtp: measurements.true_peak_dbtp,
+            leading_silence_seconds: measurements.leading_silence_seconds,
+            trailing_silence_seconds: measurements.trailing_silence_seconds,
+            clipping_evidence: format!("{:?}", measurements.clipping.evidence),
+            overall_assessment_status,
+            assessment_profile_id: assessment.profile_id.clone(),
+            assessment_profile_version: assessment.profile_version.clone(),
+            analysed_at: now.clone(),
+            source_modified_at,
+            created_at: ep.created_at,
+            updated_at: now,
+            assessment_json,
+            assessment: Some(assessment),
+            source_availability: SourceAvailability::Available,
+        };
+
+        {
+            let mut repo = self.repo.lock().map_err(|e| {
+                AppError::SystemError(format!("Catalogue lock error: {}", e))
+            })?;
+            repo.update_episode(&updated_ep)?;
+        }
+
+        self.get_episode(episode_id)
     }
 
     pub fn add_media_source_to_show(
