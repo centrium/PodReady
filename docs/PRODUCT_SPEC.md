@@ -703,6 +703,8 @@ PodReady does not use the transcript to generate new content.
 
 # 19. Transcription Architecture
 
+PodReady includes everything required for local processing and transcription. Users do not install media or AI tooling separately.
+
 Preferred approach:
 
 **whisper.cpp or equivalent local Whisper implementation**
@@ -713,7 +715,7 @@ Requirements:
 - no API dependency
 - no account
 - no uploading audio
-- model management handled by PodReady
+- model management handled by PodReady (pinned full large speech model with checksum verification)
 - progress exposed to the UI
 - transcription failure must not prevent creation of the podcast MP3
 

@@ -3,6 +3,10 @@ mod error;
 mod export;
 mod fixplan;
 mod media;
+mod transcription;
+
+#[cfg(test)]
+pub(crate) static TEST_GLOBAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use assessment::{assess_media, Assessment};
 use error::AppError;
@@ -11,6 +15,7 @@ use fixplan::{generate_fix_plan, FixPlan};
 use media::analysis::{analyse_audio, AudioMeasurements};
 use media::ffprobe::{inspect_media, MediaFormat, MediaInspection, MediaSource};
 use media::processing::{execute_fix_plan, ProcessAudioResponse};
+use transcription::{transcribe_audio, TranscriptResult};
 
 #[tauri::command]
 async fn inspect_media_cmd(path: String) -> Result<MediaSource, AppError> {
@@ -59,6 +64,13 @@ async fn process_audio_cmd(
 }
 
 #[tauri::command]
+async fn transcribe_audio_cmd(audio_path: String) -> Result<TranscriptResult, AppError> {
+    tauri::async_runtime::spawn_blocking(move || transcribe_audio(&audio_path, None))
+        .await
+        .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
+}
+
+#[tauri::command]
 async fn export_package_cmd(
     input_audio_path: String,
     source_original_path: String,
@@ -92,6 +104,7 @@ pub fn run() {
             .build(),
         )?;
       }
+      media::binaries::start_background_model_verification();
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -100,10 +113,9 @@ pub fn run() {
         assess_media_cmd,
         generate_fix_plan_cmd,
         process_audio_cmd,
+        transcribe_audio_cmd,
         export_package_cmd
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
-
-

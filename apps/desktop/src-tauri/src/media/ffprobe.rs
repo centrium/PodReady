@@ -71,7 +71,7 @@ pub fn inspect_media<P: AsRef<Path>>(path: P) -> Result<MediaSource, AppError> {
         .to_string_lossy()
         .to_string();
 
-    let output = ffprobe_cmd()
+    let output = ffprobe_cmd()?
         .args([
             "-v",
             "quiet",

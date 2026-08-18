@@ -245,7 +245,7 @@ pub fn analyse_audio<P: AsRef<Path>>(
         .to_lowercase();
     let is_lossy = ext == "mp3" || ext == "m4a" || ext == "aac" || ext == "mp4" || ext == "mov";
 
-    let output = ffmpeg_cmd()
+    let output = ffmpeg_cmd()?
         .args([
             "-nostats",
             "-i",
@@ -291,7 +291,6 @@ pub fn analyse_audio<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     #[test]
     fn test_parse_ebur128_and_silence() {
@@ -369,7 +368,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_fixture_a.wav");
 
-        let gen_status = Command::new("ffmpeg")
+        let gen_status = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -397,7 +396,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_fixture_b.wav");
 
-        let gen_status = Command::new("ffmpeg")
+        let gen_status = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -425,7 +424,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_fixture_c.wav");
 
-        let gen_status = Command::new("ffmpeg")
+        let gen_status = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -453,7 +452,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_fixture_d.wav");
 
-        let gen_status = Command::new("ffmpeg")
+        let gen_status = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -481,7 +480,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_mp3 = temp_dir.join("podready_test_fixture_e.mp3");
 
-        let gen_status = Command::new("ffmpeg")
+        let gen_status = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",

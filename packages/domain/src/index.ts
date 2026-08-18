@@ -148,7 +148,6 @@ export interface ExportOptions {
   includeTranscript: boolean;
   includeReport: boolean;
   metadata?: EpisodeMetadata;
-  transcriptText?: string;
 }
 
 export interface ExportedFile {
@@ -166,16 +165,40 @@ export interface ExportVerificationResult {
   assessment: Assessment;
 }
 
+export interface TranscriptSegment {
+  startSec: number;
+  endSec: number;
+  text: string;
+}
+
+export interface TranscriptResult {
+  text: string;
+  language?: string;
+  durationSeconds?: number;
+  segments: TranscriptSegment[];
+}
+
 export interface PodReadyPackage {
   packageDirectory: string;
   packageName: string;
   audioFile?: ExportedFile;
   transcriptFile?: ExportedFile;
+  transcriptLanguage?: string;
+  transcriptError?: string;
   reportFile?: ExportedFile;
   metadata?: EpisodeMetadata;
   artworkEmbedded: boolean;
   verificationResult: ExportVerificationResult;
+  generationDurationSeconds?: number;
+  userElapsedSeconds?: number;
   createdAt: string;
+}
+
+export function formatPackageDuration(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) {
+    return '0.0 seconds';
+  }
+  return `${seconds.toFixed(1)} seconds`;
 }
 
 

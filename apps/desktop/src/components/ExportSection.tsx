@@ -1,10 +1,11 @@
 import { useState } from "react";
-import type {
-  MediaSource,
-  ProcessAudioResponse,
-  PodReadyPackage,
-  ExportOptions,
-  EpisodeMetadata,
+import {
+  formatPackageDuration,
+  type MediaSource,
+  type ProcessAudioResponse,
+  type PodReadyPackage,
+  type ExportOptions,
+  type EpisodeMetadata,
 } from "@podready/domain";
 
 interface ExportSectionProps {
@@ -46,7 +47,6 @@ export function ExportSection({
   const [episodeNumber, setEpisodeNumber] = useState("");
   const [year, setYear] = useState(new Date().getFullYear().toString());
   const [artworkPath, setArtworkPath] = useState("");
-  const [transcriptText, setTranscriptText] = useState("");
   const [showMetadataForm, setShowMetadataForm] = useState(false);
 
   const formatLoudness = (val: number | null | undefined) => {
@@ -76,9 +76,6 @@ export function ExportSection({
       includeTranscript,
       includeReport,
       metadata,
-      transcriptText: transcriptText.trim()
-        ? transcriptText
-        : `Spoken transcript for ${media.filename}\nExtracted by PodReady.`,
     });
   };
 
@@ -141,7 +138,8 @@ export function ExportSection({
               onChange={(e) => setIncludeTranscript(e.target.checked)}
               className="rounded text-indigo-600 focus:ring-indigo-500"
             />
-            <span className="font-semibold text-gray-900">Transcript companion (.txt)</span>
+            <span className="font-semibold text-gray-900">Spoken transcript (.txt)</span>
+            <span className="text-gray-500 text-[11px]">(Local Whisper STT)</span>
           </label>
 
           <label className="flex items-center space-x-2 p-2 bg-gray-50 rounded-lg hover:bg-gray-100/70 transition-colors cursor-pointer">
@@ -266,21 +264,6 @@ export function ExportSection({
                 />
               </div>
             </div>
-
-            {includeTranscript && (
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-600 mb-1">
-                  Transcript text (optional custom text)
-                </label>
-                <textarea
-                  value={transcriptText}
-                  onChange={(e) => setTranscriptText(e.target.value)}
-                  placeholder="Spoken words..."
-                  rows={2}
-                  className="w-full px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-mono"
-                />
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -337,17 +320,32 @@ export function ExportSection({
                 🎵 {exportResult.audioFile.filename} ({(exportResult.audioFile.fileSizeBytes / 1024 / 1024).toFixed(2)} MB)
               </div>
             )}
-            {exportResult.transcriptFile && (
+            {exportResult.transcriptFile ? (
               <div className="text-indigo-900 truncate pl-3">
                 📝 {exportResult.transcriptFile.filename}
+                {exportResult.transcriptLanguage && (
+                  <span className="text-[11px] text-indigo-700 ml-2 font-normal">
+                    (detected language: {exportResult.transcriptLanguage})
+                  </span>
+                )}
               </div>
-            )}
+            ) : exportResult.transcriptError ? (
+              <div className="text-amber-800 text-[11px] truncate pl-3">
+                ⚠️ Transcript could not be created ({exportResult.transcriptError}). Audio is still verified and saved.
+              </div>
+            ) : null}
             {exportResult.reportFile && (
               <div className="text-slate-900 truncate pl-3">
-                📊 {exportResult.reportFile.filename}
+                ✓ Verification report ({exportResult.reportFile.filename})
               </div>
             )}
           </div>
+
+          {(typeof exportResult.userElapsedSeconds === "number" || typeof exportResult.generationDurationSeconds === "number") && (
+            <p className="text-xs text-gray-600 font-medium">
+              Package created in {formatPackageDuration(exportResult.userElapsedSeconds ?? exportResult.generationDurationSeconds ?? 0)}
+            </p>
+          )}
 
           <p className="text-[11px] text-gray-500 font-mono break-all">
             Saved to: {exportResult.packageDirectory}

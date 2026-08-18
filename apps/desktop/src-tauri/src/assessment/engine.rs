@@ -895,13 +895,13 @@ mod tests {
     #[test]
     fn test_real_audio_pipeline_e2e() {
         use crate::media::analysis::analyse_audio;
+        use crate::media::binaries::ffmpeg_cmd;
         use crate::media::ffprobe::inspect_media;
-        use std::process::Command;
 
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_stage3_real_file.wav");
 
-        let gen = Command::new("ffmpeg")
+        let gen = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",

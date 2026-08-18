@@ -23,7 +23,6 @@ pub struct ExportOptions {
     pub include_transcript: bool,
     pub include_report: bool,
     pub metadata: Option<EpisodeMetadata>,
-    pub transcript_text: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -59,11 +58,16 @@ pub struct PodReadyPackage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_file: Option<ExportedFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub report_file: Option<ExportedFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EpisodeMetadata>,
     pub artwork_embedded: bool,
     pub verification_result: ExportVerificationResult,
+    pub generation_duration_seconds: f64,
     pub created_at: String,
 }
 
@@ -74,6 +78,23 @@ pub struct ReportActionItem {
     pub title: String,
     pub description: String,
     pub success: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportTranscriptionInfo {
+    pub requested: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detected_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -90,4 +111,6 @@ pub struct PublishingJsonReport {
     pub final_mp3_measurements: AudioMeasurements,
     pub final_mp3_assessment: Assessment,
     pub verification_passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcription: Option<ReportTranscriptionInfo>,
 }

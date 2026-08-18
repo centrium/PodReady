@@ -191,7 +191,7 @@ pub fn execute_fix_plan(
         target_i, target_tp
     );
 
-    let pass1_output = ffmpeg_cmd()
+    let pass1_output = ffmpeg_cmd()?
         .args([
             "-hide_banner",
             "-nostats",
@@ -229,7 +229,7 @@ pub fn execute_fix_plan(
 
     let sample_rate_str = initial_inspection.inspection.sample_rate.to_string();
 
-    let pass2_output = ffmpeg_cmd()
+    let pass2_output = ffmpeg_cmd()?
         .args([
             "-y",
             "-hide_banner",
@@ -304,7 +304,6 @@ mod tests {
     use crate::assessment::engine::OverallStatus;
     use crate::assessment::profiles::PODCAST_STEREO_V1;
     use crate::fixplan::engine::{generate_fix_plan, FixAction, FixConfidence};
-    use std::process::Command;
 
     #[test]
     fn test_parse_loudnorm_pass1_json() {
@@ -337,7 +336,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_noop.wav");
 
-        let _ = Command::new("ffmpeg")
+        let _ = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -371,7 +370,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_integrity.wav");
 
-        let _ = Command::new("ffmpeg")
+        let _ = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -423,7 +422,7 @@ mod tests {
         let test_wav = temp_dir.join("podready_test_e2e_loud.wav");
 
         // Generate audio that is louder than target (-16 LUFS) with high true peak
-        let _ = Command::new("ffmpeg")
+        let _ = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -496,7 +495,7 @@ mod tests {
         let test_wav = temp_dir.join("podready_test_mono_quiet.wav");
 
         // Generate quiet mono audio (-25 LUFS)
-        let _ = Command::new("ffmpeg")
+        let _ = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -555,7 +554,7 @@ mod tests {
         let test_wav = temp_dir.join("podready_test_clipping_advisory.wav");
 
         // Generate hard-clipped audio using aggressive volume to produce flat top clipping
-        let _ = Command::new("ffmpeg")
+        let _ = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",
@@ -609,7 +608,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_wav = temp_dir.join("podready_test_reporting_fidelity.wav");
 
-        let _ = Command::new("ffmpeg")
+        let _ = ffmpeg_cmd().unwrap()
             .args([
                 "-y",
                 "-f",

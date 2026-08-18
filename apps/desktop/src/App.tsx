@@ -109,6 +109,7 @@ function App() {
     if (!media) return;
     setIsExporting(true);
     setError(null);
+    const startedAt = performance.now();
 
     try {
       const inputAudioPath = processingResponse?.candidatePath || media.path;
@@ -131,7 +132,20 @@ function App() {
         appliedActions,
       });
 
-      setExportResult(pkg);
+      const elapsedSeconds = (performance.now() - startedAt) / 1000;
+      const backendSeconds = pkg.generationDurationSeconds ?? 0;
+      const diffSeconds = elapsedSeconds - backendSeconds;
+
+      console.info(
+        `[PodReady Export Timing] User elapsed: ${elapsedSeconds.toFixed(1)}s | ` +
+        `Backend package: ${backendSeconds.toFixed(1)}s | ` +
+        `Discrepancy (IPC/overhead): ${diffSeconds.toFixed(1)}s`
+      );
+
+      setExportResult({
+        ...pkg,
+        userElapsedSeconds: elapsedSeconds,
+      });
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Failed to export publishing package.");

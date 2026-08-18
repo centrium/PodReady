@@ -19,7 +19,7 @@ pub enum AppError {
     #[error("Unsupported processing action: {0}")]
     UnsupportedAction(String),
 
-    #[error("An unexpected system error occurred.")]
+    #[error("{0}")]
     SystemError(String),
 }
 

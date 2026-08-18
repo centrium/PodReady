@@ -45,7 +45,7 @@ pub fn encode_publishing_mp3(
         }
     }
 
-    let mut cmd = ffmpeg_cmd();
+    let mut cmd = ffmpeg_cmd()?;
     cmd.args(["-y", "-hide_banner", "-nostats", "-i", source_audio_path]);
 
     if artwork_valid {
