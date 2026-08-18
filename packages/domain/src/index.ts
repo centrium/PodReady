@@ -201,5 +201,81 @@ export function formatPackageDuration(seconds: number): string {
   return `${seconds.toFixed(1)} seconds`;
 }
 
+export type BatchEpisodeStatus =
+  | 'WAITING'
+  | 'INSPECTING'
+  | 'ANALYSING'
+  | 'ASSESSING'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'CANCELLED';
 
+export interface BatchEpisode {
+  id: string;
+  sourcePath: string;
+  filename: string;
+  status: BatchEpisodeStatus;
+  format?: MediaFormat;
+  codec?: string;
+  inspection?: MediaInspection;
+  measurements?: AudioMeasurements;
+  assessment?: Assessment;
+  durationSeconds?: number;
+  elapsedSeconds?: number;
+  error?: string;
+}
+
+export interface BatchAnalysisSummary {
+  total: number;
+  complete: number;
+  failed: number;
+  cancelled: number;
+  ready: number;
+  attention: number;
+  needsAttention: number;
+  elapsedSeconds: number;
+}
+
+export type BatchJobStatus = 'QUEUED' | 'RUNNING' | 'COMPLETE' | 'CANCELLED';
+
+export interface BatchAnalysisJob {
+  id: string;
+  status: BatchJobStatus;
+  episodes: BatchEpisode[];
+  summary: BatchAnalysisSummary;
+  createdAt: string;
+}
+
+export interface BatchProgressPayload {
+  jobId: string;
+  episodeId: string;
+  status: BatchEpisodeStatus;
+  episode: BatchEpisode;
+  summary: BatchAnalysisSummary;
+}
+
+export function formatBatchDuration(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) {
+    return '0.0 seconds';
+  }
+  return `${seconds.toFixed(1)} seconds`;
+}
+
+export function formatAudioDuration(seconds?: number | null): string {
+  if (seconds === null || seconds === undefined || isNaN(seconds) || seconds <= 0) {
+    return '—';
+  }
+  const totalSecs = Math.round(seconds);
+  if (totalSecs === 0 && seconds > 0) {
+    return '< 1s';
+  }
+  const hrs = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
 

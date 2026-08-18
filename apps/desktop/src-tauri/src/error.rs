@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("Unsupported processing action: {0}")]
     UnsupportedAction(String),
 
+    #[error("The operation was cancelled.")]
+    Cancelled,
+
     #[error("{0}")]
     SystemError(String),
 }
@@ -56,6 +59,10 @@ impl Serialize for AppError {
                 message: self.to_string(),
                 code: "UNSUPPORTED_ACTION".to_string(),
             },
+            AppError::Cancelled => ErrorResponse {
+                message: self.to_string(),
+                code: "CANCELLED".to_string(),
+            },
             AppError::SystemError(_) => ErrorResponse {
                 message: self.to_string(),
                 code: "SYSTEM_ERROR".to_string(),
@@ -65,4 +72,5 @@ impl Serialize for AppError {
         response.serialize(serializer)
     }
 }
+
 

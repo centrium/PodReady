@@ -1,4 +1,5 @@
 mod assessment;
+mod batch;
 mod error;
 mod export;
 mod fixplan;
@@ -9,6 +10,10 @@ mod transcription;
 pub(crate) static TEST_GLOBAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use assessment::{assess_media, Assessment};
+use batch::{
+    cancel_batch_analysis_cmd, get_batch_job_cmd, select_files_cmd, start_batch_analysis_cmd,
+    BatchManager,
+};
 use error::AppError;
 use export::{create_publishing_package, ExportOptions, PodReadyPackage, ReportActionItem};
 use fixplan::{generate_fix_plan, FixPlan};
@@ -96,6 +101,7 @@ async fn export_package_cmd(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .manage(BatchManager::new())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -114,8 +120,13 @@ pub fn run() {
         generate_fix_plan_cmd,
         process_audio_cmd,
         transcribe_audio_cmd,
-        export_package_cmd
+        export_package_cmd,
+        start_batch_analysis_cmd,
+        cancel_batch_analysis_cmd,
+        get_batch_job_cmd,
+        select_files_cmd
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
+
