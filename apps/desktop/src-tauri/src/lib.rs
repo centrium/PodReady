@@ -1,10 +1,12 @@
 mod assessment;
 mod error;
+mod export;
 mod fixplan;
 mod media;
 
 use assessment::{assess_media, Assessment};
 use error::AppError;
+use export::{create_publishing_package, ExportOptions, PodReadyPackage, ReportActionItem};
 use fixplan::{generate_fix_plan, FixPlan};
 use media::analysis::{analyse_audio, AudioMeasurements};
 use media::ffprobe::{inspect_media, MediaFormat, MediaInspection, MediaSource};
@@ -56,6 +58,29 @@ async fn process_audio_cmd(
     .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
 }
 
+#[tauri::command]
+async fn export_package_cmd(
+    input_audio_path: String,
+    source_original_path: String,
+    options: ExportOptions,
+    before_measurements: Option<AudioMeasurements>,
+    before_assessment: Option<Assessment>,
+    applied_actions: Vec<ReportActionItem>,
+) -> Result<PodReadyPackage, AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        create_publishing_package(
+            &input_audio_path,
+            &source_original_path,
+            &options,
+            before_measurements,
+            before_assessment,
+            applied_actions,
+        )
+    })
+    .await
+    .map_err(|e| AppError::SystemError(format!("Task spawn error: {}", e)))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -74,9 +99,11 @@ pub fn run() {
         analyse_audio_cmd,
         assess_media_cmd,
         generate_fix_plan_cmd,
-        process_audio_cmd
+        process_audio_cmd,
+        export_package_cmd
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
+
 

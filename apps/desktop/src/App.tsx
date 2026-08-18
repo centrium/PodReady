@@ -6,6 +6,8 @@ import type {
   Assessment,
   FixPlan,
   ProcessAudioResponse,
+  PodReadyPackage,
+  ExportOptions,
 } from "@podready/domain";
 import { Dropzone } from "./components/Dropzone";
 import { Report } from "./components/Report";
@@ -16,6 +18,8 @@ function App() {
   const [isAnalysing, setIsAnalysing] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [processingResponse, setProcessingResponse] = useState<ProcessAudioResponse | null>(null);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [exportResult, setExportResult] = useState<PodReadyPackage | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleFileDropped = async (path: string) => {
@@ -28,6 +32,8 @@ function App() {
     setIsAnalysing(false);
     setIsProcessing(false);
     setProcessingResponse(null);
+    setIsExporting(false);
+    setExportResult(null);
 
     try {
       // Step 1: Inspect media properties via ffprobe
@@ -99,6 +105,41 @@ function App() {
     }
   };
 
+  const handleExportPackage = async (options: ExportOptions) => {
+    if (!media) return;
+    setIsExporting(true);
+    setError(null);
+
+    try {
+      const inputAudioPath = processingResponse?.candidatePath || media.path;
+      const sourceOriginalPath = media.path;
+      const beforeMeasurements = processingResponse?.beforeMeasurements || media.measurements || null;
+      const beforeAssessment = processingResponse?.beforeAssessment || media.assessment || null;
+      const appliedActions = (processingResponse?.result.actionsApplied || []).map((a) => ({
+        actionType: a.actionType,
+        title: a.title,
+        description: a.description,
+        success: a.success,
+      }));
+
+      const pkg = await invoke<PodReadyPackage>("export_package_cmd", {
+        inputAudioPath,
+        sourceOriginalPath,
+        options,
+        beforeMeasurements,
+        beforeAssessment,
+        appliedActions,
+      });
+
+      setExportResult(pkg);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to export publishing package.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center p-8 font-sans">
       {!loadingFile && !media && <Dropzone onFileDropped={handleFileDropped} />}
@@ -117,6 +158,9 @@ function App() {
           isProcessing={isProcessing}
           processingResponse={processingResponse}
           onProcessAudio={handleProcessAudio}
+          isExporting={isExporting}
+          exportResult={exportResult}
+          onExport={handleExportPackage}
         />
       )}
 
@@ -138,4 +182,5 @@ function App() {
 }
 
 export default App;
+
 

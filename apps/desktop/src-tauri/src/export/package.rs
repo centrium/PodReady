@@ -1,0 +1,148 @@
+use crate::assessment::engine::Assessment;
+use crate::error::AppError;
+use crate::export::mp3::encode_publishing_mp3;
+use crate::export::report::generate_json_report;
+use crate::export::transcript::write_transcript_file;
+use crate::export::types::{
+    ExportOptions, ExportVerificationResult, PodReadyPackage, PublishingJsonReport,
+    ReportActionItem,
+};
+use crate::export::verification::verify_exported_mp3;
+use crate::media::analysis::AudioMeasurements;
+use crate::media::ffprobe::inspect_media;
+use std::path::{Path, PathBuf};
+
+/// Creates the complete publishing package in the user's chosen destination directory.
+/// All processing is strictly local and non-destructive.
+pub fn create_publishing_package(
+    input_audio_path: &str,
+    source_original_path: &str,
+    options: &ExportOptions,
+    before_measurements: Option<AudioMeasurements>,
+    before_assessment: Option<Assessment>,
+    applied_actions: Vec<ReportActionItem>,
+) -> Result<PodReadyPackage, AppError> {
+    let source_path = Path::new(source_original_path);
+    let stem = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("episode");
+
+    let source_filename = source_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("episode")
+        .to_string();
+
+    // Create deterministic package directory: [destination]/[stem]_PodReady
+    let dest_base = Path::new(&options.destination_directory);
+    let package_dir_name = format!("{}_PodReady", stem);
+    let package_dir_path: PathBuf = dest_base.join(&package_dir_name);
+
+    std::fs::create_dir_all(&package_dir_path).map_err(|e| {
+        AppError::SystemError(format!(
+            "Failed to create package directory at {}: {}",
+            package_dir_path.display(),
+            e
+        ))
+    })?;
+
+    let inspection = inspect_media(input_audio_path)?;
+    let channels = inspection.inspection.channels;
+    let sample_rate = inspection.inspection.sample_rate;
+
+    let mut exported_audio = None;
+    let mut artwork_embedded = false;
+    let mut verification_result: Option<ExportVerificationResult> = None;
+
+    // 1. Final Audio Export (MP3)
+    if options.include_audio {
+        let mp3_filename = format!("{}_ready.mp3", stem);
+        let mp3_path = package_dir_path.join(&mp3_filename);
+        let mp3_path_str = mp3_path.to_string_lossy().to_string();
+
+        let outcome = encode_publishing_mp3(
+            input_audio_path,
+            &mp3_path_str,
+            channels,
+            sample_rate,
+            options.metadata.as_ref(),
+        )?;
+
+        artwork_embedded = outcome.artwork_embedded;
+        exported_audio = Some(outcome.file);
+
+        // 2. Post-Export Verification on the actual MP3
+        let verified = verify_exported_mp3(&mp3_path_str)?;
+        verification_result = Some(verified);
+    }
+
+    // 3. Transcript Companion Export
+    let mut exported_transcript = None;
+    if options.include_transcript {
+        if let Some(text) = &options.transcript_text {
+            if !text.trim().is_empty() {
+                let txt_filename = format!("{}_transcript.txt", stem);
+                let txt_path = package_dir_path.join(&txt_filename);
+                let txt_path_str = txt_path.to_string_lossy().to_string();
+
+                let txt_file = write_transcript_file(text, &txt_path_str)?;
+                exported_transcript = Some(txt_file);
+            }
+        }
+    }
+
+    // 4. Verification Report Export
+    let mut exported_report = None;
+    let final_verification = match verification_result {
+        Some(v) => v,
+        None => {
+            // Fallback verification from input audio if audio export was bypassed
+            let verified = verify_exported_mp3(input_audio_path)?;
+            verified
+        }
+    };
+
+    let now_iso = {
+        let duration = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = duration.as_secs();
+        format!("{}-01-01T00:00:00Z (timestamp: {})", 1970 + secs / 31536000, secs)
+    };
+
+    if options.include_report {
+        let report_filename = format!("{}_report.json", stem);
+        let report_path = package_dir_path.join(&report_filename);
+        let report_path_str = report_path.to_string_lossy().to_string();
+
+        let report_data = PublishingJsonReport {
+            podready_version: "1.0.0".to_string(),
+            created_at: now_iso.clone(),
+            package_name: package_dir_name.clone(),
+            source_filename,
+            metadata: options.metadata.clone(),
+            actions_applied: applied_actions,
+            before_measurements,
+            before_assessment,
+            final_mp3_measurements: final_verification.measurements.clone(),
+            final_mp3_assessment: final_verification.assessment.clone(),
+            verification_passed: final_verification.passed,
+        };
+
+        let report_file = generate_json_report(&report_path_str, &report_data)?;
+        exported_report = Some(report_file);
+    }
+
+    Ok(PodReadyPackage {
+        package_directory: package_dir_path.to_string_lossy().to_string(),
+        package_name: package_dir_name,
+        audio_file: exported_audio,
+        transcript_file: exported_transcript,
+        report_file: exported_report,
+        metadata: options.metadata.clone(),
+        artwork_embedded,
+        verification_result: final_verification,
+        created_at: now_iso,
+    })
+}

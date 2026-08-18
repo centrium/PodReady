@@ -132,4 +132,51 @@ export interface AppError {
   code?: string;
 }
 
+export interface EpisodeMetadata {
+  title?: string;
+  artist?: string;
+  album?: string;
+  episodeNumber?: string;
+  year?: string;
+  genre?: string;
+  artworkPath?: string;
+}
+
+export interface ExportOptions {
+  destinationDirectory: string;
+  includeAudio: boolean;
+  includeTranscript: boolean;
+  includeReport: boolean;
+  metadata?: EpisodeMetadata;
+  transcriptText?: string;
+}
+
+export interface ExportedFile {
+  path: string;
+  filename: string;
+  fileSizeBytes: number;
+  fileType: 'audio' | 'transcript' | 'report';
+}
+
+export interface ExportVerificationResult {
+  passed: boolean;
+  overallStatus: OverallStatus;
+  summary: string;
+  measurements: AudioMeasurements;
+  assessment: Assessment;
+}
+
+export interface PodReadyPackage {
+  packageDirectory: string;
+  packageName: string;
+  audioFile?: ExportedFile;
+  transcriptFile?: ExportedFile;
+  reportFile?: ExportedFile;
+  metadata?: EpisodeMetadata;
+  artworkEmbedded: boolean;
+  verificationResult: ExportVerificationResult;
+  createdAt: string;
+}
+
+
 

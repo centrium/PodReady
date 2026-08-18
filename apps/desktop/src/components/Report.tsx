@@ -3,8 +3,11 @@ import type {
   AssessmentStatus,
   OverallStatus,
   ProcessAudioResponse,
+  PodReadyPackage,
+  ExportOptions,
 } from "@podready/domain";
 import { BulletSparkline } from "sexy-sparklines";
+import { ExportSection } from "./ExportSection";
 
 interface ReportProps {
   media: MediaSource;
@@ -12,6 +15,9 @@ interface ReportProps {
   isProcessing?: boolean;
   processingResponse?: ProcessAudioResponse | null;
   onProcessAudio?: () => void;
+  isExporting?: boolean;
+  exportResult?: PodReadyPackage | null;
+  onExport?: (options: ExportOptions) => Promise<void>;
 }
 
 export function Report({
@@ -20,6 +26,9 @@ export function Report({
   isProcessing,
   processingResponse,
   onProcessAudio,
+  isExporting = false,
+  exportResult = null,
+  onExport,
 }: ReportProps) {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -489,8 +498,22 @@ export function Report({
           </div>
         </div>
       )}
+
+      {/* PUBLISHING PACKAGE & EXPORT SECTION */}
+      {(processingResponse || (!hasActionableFixes && assessment?.overallStatus === "READY")) && onExport && !isProcessing && (
+        <div className="pt-2 border-t border-gray-100">
+          <ExportSection
+            media={media}
+            processingResponse={processingResponse}
+            isExporting={isExporting}
+            exportResult={exportResult}
+            onExport={onExport}
+          />
+        </div>
+      )}
     </div>
   );
 }
+
 
 
