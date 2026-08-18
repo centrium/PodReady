@@ -34,7 +34,7 @@ export function ExportSection({
   // Infer parent directory from media.path
   const pathParts = media.path.split(/[/\\]/);
   pathParts.pop();
-  const defaultDest = pathParts.join("/") || "/Users/matt/Desktop";
+  const defaultDest = pathParts.join("/");
 
   const [destinationDirectory, setDestinationDirectory] = useState(defaultDest);
   const [includeAudio, setIncludeAudio] = useState(true);

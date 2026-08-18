@@ -1,17 +1,74 @@
+use serde::Deserialize;
 use std::path::Path;
 
-const EXPECTED_SMALL_MODEL_SHA256: &str =
-    "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b";
-const SMALL_MODEL_FILENAME: &str = "ggml-small.bin";
+#[derive(Deserialize)]
+struct Manifest {
+    models: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    #[allow(dead_code)]
+    name: String,
+    filename: String,
+    sha256: String,
+    #[serde(default)]
+    required: bool,
+}
 
 fn main() {
-    println!("cargo:rerun-if-changed=resources/models");
+    println!("cargo:rerun-if-changed=resources/models/manifest.json");
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-    let model_path = Path::new(&manifest_dir).join("resources/models").join(SMALL_MODEL_FILENAME);
+    let manifest_file_path = Path::new(&manifest_dir).join("resources/models/manifest.json");
 
-    if model_path.exists() {
-        verify_build_model(&model_path, EXPECTED_SMALL_MODEL_SHA256);
+    if !manifest_file_path.exists() {
+        panic!(
+            "\n\
+            ================================================================================\n\
+            BUILD ERROR: Model manifest is missing!\n\
+            Expected file: {:?}\n\
+            ================================================================================\n",
+            manifest_file_path
+        );
+    }
+
+    let manifest_content = std::fs::read_to_string(&manifest_file_path)
+        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", manifest_file_path, e));
+    let manifest: Manifest = serde_json::from_str(&manifest_content)
+        .unwrap_or_else(|e| panic!("Failed to parse JSON in {:?}: {}", manifest_file_path, e));
+
+    for model in manifest.models {
+        println!("cargo:rerun-if-changed=resources/models/{}", model.filename);
+
+        if model.required {
+            let model_path = Path::new(&manifest_dir)
+                .join("resources/models")
+                .join(&model.filename);
+
+            if !model_path.exists() {
+                panic!(
+                    "\n\
+                    ================================================================================\n\
+                    BUILD ERROR: Required Whisper speech model is missing!\n\
+                    \n\
+                    Expected file:    {:?}\n\
+                    Expected SHA-256: {}\n\
+                    \n\
+                    PodReady bundles the full Whisper model in production releases so users never\n\
+                    have to configure or download models separately.\n\
+                    \n\
+                    To provision the required runtime assets, please run:\n\
+                        pnpm setup\n\
+                    \n\
+                    from the repository root.\n\
+                    ================================================================================\n",
+                    model_path, model.sha256
+                );
+            }
+
+            verify_build_model(&model_path, &model.sha256);
+        }
     }
 
     tauri_build::build();

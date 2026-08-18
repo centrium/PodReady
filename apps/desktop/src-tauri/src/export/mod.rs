@@ -517,7 +517,7 @@ mod tests {
             let _ = std::fs::create_dir_all(&temp_dir);
 
             let options = ExportOptions {
-                destination_directory: "/Users/matt/Desktop".to_string(),
+                destination_directory: temp_dir.to_string_lossy().to_string(),
                 include_audio: true,
                 include_transcript: true,
                 include_report: true,
@@ -555,9 +555,16 @@ mod tests {
     #[test]
     fn test_first_vs_second_export_breakdown() {
         let mcd_path = std::path::Path::new("/Users/matt/Desktop/McDonalds_LNG_061019.wav");
-        if !mcd_path.exists() {
+        let res_dir = get_resources_dir().expect("resources dir exists");
+        let fallback_fixture = res_dir.join("fixtures").join("spoken_jfk_16k.wav");
+
+        let test_audio_path = if mcd_path.exists() {
+            mcd_path.to_path_buf()
+        } else if fallback_fixture.exists() {
+            fallback_fixture
+        } else {
             return;
-        }
+        };
 
         let _guard = crate::TEST_GLOBAL_ENV_LOCK.lock().unwrap();
         let temp_dir = std::env::temp_dir().join("podready_test_export_comparison");
@@ -574,8 +581,8 @@ mod tests {
         // Export 1 (Cold)
         let t1_start = std::time::Instant::now();
         let pkg1 = create_publishing_package(
-            mcd_path.to_str().unwrap(),
-            mcd_path.to_str().unwrap(),
+            test_audio_path.to_str().unwrap(),
+            test_audio_path.to_str().unwrap(),
             &options,
             None,
             None,
@@ -587,8 +594,8 @@ mod tests {
         // Export 2 (Warm)
         let t2_start = std::time::Instant::now();
         let pkg2 = create_publishing_package(
-            mcd_path.to_str().unwrap(),
-            mcd_path.to_str().unwrap(),
+            test_audio_path.to_str().unwrap(),
+            test_audio_path.to_str().unwrap(),
             &options,
             None,
             None,

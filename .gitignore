@@ -142,7 +142,8 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-.turbo
- .turbo/cache/f8d429d6b6f84fe6.tar.zst
+.turbo/
 
-apps/desktop/src-tauri/resources/models/*
+apps/desktop/src-tauri/resources/models/*.bin
+apps/desktop/src-tauri/resources/models/*.part
+

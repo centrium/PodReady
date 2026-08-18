@@ -19,8 +19,22 @@ Bundled Media Runtime
 ├── FFmpeg (audio analysis, filter graphs, two-pass loudnorm, MP3 encoding)
 ├── FFprobe (container & stream inspection)
 ├── Whisper (native whisper.cpp speech-to-text inference with Metal acceleration)
-└── Whisper Speech Model (pinned ggml-large-v3-turbo model with SHA-256 integrity check)
+└── Whisper Speech Model (pinned ggml-small.bin model with SHA-256 integrity check, provisioned via pnpm setup)
 ```
+
+### Runtime Asset Provisioning & Developer Setup
+To keep Git repository clones lightweight and compliant with Git hosting size recommendations, large binary model files (such as `ggml-small.bin` ~465MB) are excluded from Git version control and managed via the authoritative asset manifest (`apps/desktop/src-tauri/resources/models/manifest.json`).
+
+Fresh clone developer workflow:
+```bash
+pnpm install
+pnpm setup
+pnpm --filter desktop tauri dev
+```
+
+- **`pnpm setup`**: Downloads `ggml-small.bin` to `apps/desktop/src-tauri/resources/models/`, streams to `<filename>.part`, validates its SHA-256 checksum (`1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`), and atomically promotes it. Idempotent and skips download if already verified.
+- **Build Enforcement**: `apps/desktop/src-tauri/build.rs` asserts the presence and SHA-256 integrity of `ggml-small.bin` at compile-time. If unprovisioned, the build fails with a clear message directing the developer to run `pnpm setup`.
+- **Release Bundling**: The production `.app` bundles `ggml-small.bin` inside `Resources/resources/models/`, ensuring end-users never have to download or configure models manually.
 
 Binary and resource resolution is centralized strictly in `apps/desktop/src-tauri/src/media/binaries.rs`:
 1. Production macOS App bundle: resolves from `Contents/Resources/resources/bin` and `models/`.
