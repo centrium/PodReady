@@ -12,6 +12,7 @@ use crate::catalogue::models::{
     ShowSummary, ShowWithEpisodes, SourceAvailability,
 };
 use crate::catalogue::repository::CatalogueRepository;
+use crate::catalogue::show_check::{run_show_check, CandidateMeasurements, ShowCheck};
 use crate::error::AppError;
 use crate::media::ffprobe::{MediaFormat, MediaSource};
 
@@ -103,6 +104,53 @@ impl CatalogueService {
         let episodes = repo.get_episodes_for_show(id)?;
 
         Ok(compute_show_baseline(&show, &episodes))
+    }
+
+    /// Computes Show Check for a catalogued episode using Leave-One-Out (LOO) baseline.
+    /// Excludes the target episode from the comparison baseline so the candidate does not define its own baseline.
+    pub fn get_show_check_for_episode(&self, episode_id: &str) -> Result<ShowCheck, AppError> {
+        let repo = self.repo.lock().map_err(|e| {
+            AppError::SystemError(format!("Catalogue lock error: {}", e))
+        })?;
+
+        let target_ep = repo
+            .get_episode_by_id(episode_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Episode {} not found", episode_id)))?;
+
+        let show = repo
+            .get_show_by_id(&target_ep.show_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Show {} not found", target_ep.show_id)))?;
+
+        let all_episodes = repo.get_episodes_for_show(&target_ep.show_id)?;
+
+        // Leave-One-Out: filter out this episode from historical baseline dataset
+        let other_episodes: Vec<CatalogueEpisode> = all_episodes
+            .into_iter()
+            .filter(|ep| ep.id != target_ep.id)
+            .collect();
+
+        let loo_baseline = compute_show_baseline(&show, &other_episodes);
+        let candidate_measurements = CandidateMeasurements::from_catalogue_episode(&target_ep);
+        let is_stale = target_ep.source_availability == SourceAvailability::Changed;
+
+        Ok(run_show_check(&loo_baseline, &candidate_measurements, is_stale))
+    }
+
+    /// Computes Show Check for a newly analysed media candidate (e.g. in Workspace) against a Show's full baseline.
+    pub fn run_show_check_for_media(&self, show_id: &str, media: &MediaSource) -> Result<ShowCheck, AppError> {
+        let repo = self.repo.lock().map_err(|e| {
+            AppError::SystemError(format!("Catalogue lock error: {}", e))
+        })?;
+
+        let show = repo
+            .get_show_by_id(show_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Show {} not found", show_id)))?;
+
+        let episodes = repo.get_episodes_for_show(show_id)?;
+        let baseline = compute_show_baseline(&show, &episodes);
+        let candidate_measurements = CandidateMeasurements::from_media_source(media);
+
+        Ok(run_show_check(&baseline, &candidate_measurements, false))
     }
 
     pub fn delete_show(&self, id: &str) -> Result<(), AppError> {

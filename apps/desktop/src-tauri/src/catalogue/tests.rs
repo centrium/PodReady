@@ -6,11 +6,16 @@ use tempfile::tempdir;
 use crate::assessment::engine::{assess_media, OverallStatus};
 use crate::batch::{BatchEpisode, BatchEpisodeStatus};
 
+use crate::catalogue::baseline::{compute_show_baseline, BaselineMaturity, ShowBaseline};
 use crate::catalogue::models::{
     AddEpisodeStatus, SourceAvailability,
 };
 use crate::catalogue::repository::CatalogueRepository;
 use crate::catalogue::service::CatalogueService;
+use crate::catalogue::show_check::{
+    run_show_check, CandidateMeasurements, MetricComparisonStatus, MetricDirection,
+    ShowCheckStatus,
+};
 use crate::media::analysis::{AudioMeasurements, ClippingAnalysis, ClippingEvidence};
 use crate::media::ffprobe::{MediaFormat, MediaInspection, MediaSource};
 
@@ -571,8 +576,6 @@ fn test_explicit_typed_columns_queryable_without_assessment_json() {
 // =========================================================================
 // STAGE 5C: SHOW BASELINE & HISTORICAL CHARACTERISTICS TESTS
 // =========================================================================
-
-use crate::catalogue::baseline::BaselineMaturity;
 
 #[test]
 fn test_baseline_maturity_model() {
@@ -1244,4 +1247,610 @@ fn test_synthetic_four_episode_ubercast_calibration_scenario() {
     assert_eq!(baseline.clipping.possible_count, 1);
     assert_eq!(baseline.clipping.total_checked, 4);
 }
+
+// =========================================================================
+// STAGE 5D: SHOW CHECK / EPISODE-TO-SHOW COMPARISON ENGINE TESTS
+// =========================================================================
+
+#[test]
+fn test_show_check_candidate_inside_q1_q3_is_typical() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("UberCast", None).expect("show");
+
+    // Add 4 episodes with loudness: -18.0, -16.5, -15.5, -14.0 LUFS (Median = -16.0, Q1 = -17.625, Q3 = -14.375)
+    for (i, lufs) in [-18.0, -16.5, -15.5, -14.0].iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, *lufs, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    let candidate = create_test_media_source("/test/candidate.wav", 60.0, -16.0, -1.5);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    assert_eq!(check.status, ShowCheckStatus::Typical);
+    let l_metric = check.metrics.iter().find(|m| m.id == "loudness").expect("loudness metric");
+    assert_eq!(l_metric.status, MetricComparisonStatus::Typical);
+    assert_eq!(l_metric.direction, MetricDirection::WithinUsual);
+    assert!(l_metric.message.contains("Within this Show's usual loudness range"));
+}
+
+#[test]
+fn test_show_check_candidate_slightly_outside_usual_range() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("UberCast", None).expect("show");
+
+    // 4 episodes: -17.0, -16.5, -15.5, -15.0 LUFS
+    // Q1 = -16.875, Q3 = -15.125, IQR = 1.75 LU
+    for (i, lufs) in [-17.0, -16.5, -15.5, -15.0].iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, *lufs, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate at -17.5 LUFS (< Q1 (-16.875), but >= Q1 - IQR (-18.625)) -> SLIGHTLY_DIFFERENT
+    let candidate = create_test_media_source("/test/candidate.wav", 60.0, -17.5, -1.5);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    let l_metric = check.metrics.iter().find(|m| m.id == "loudness").expect("loudness metric");
+    assert_eq!(l_metric.status, MetricComparisonStatus::SlightlyDifferent);
+    assert_eq!(l_metric.direction, MetricDirection::BelowUsual);
+    // Overall status remains TYPICAL because only slightly different
+    assert_eq!(check.status, ShowCheckStatus::Typical);
+    assert!(check.summary.contains("Within normal variation for this Show with minor differences"));
+}
+
+#[test]
+fn test_show_check_candidate_materially_outside_history_is_different() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("UberCast", None).expect("show");
+
+    for (i, lufs) in [-17.0, -16.5, -15.5, -15.0].iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, *lufs, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate at -23.0 LUFS (< Q1 - IQR = -18.625) -> DIFFERENT
+    let candidate = create_test_media_source("/test/candidate.wav", 60.0, -23.0, -1.5);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    assert_eq!(check.status, ShowCheckStatus::Different);
+    let l_metric = check.metrics.iter().find(|m| m.id == "loudness").expect("loudness metric");
+    assert_eq!(l_metric.status, MetricComparisonStatus::Different);
+    assert_eq!(l_metric.direction, MetricDirection::BelowUsual);
+    assert!(l_metric.message.contains("Quieter than this Show usually runs"));
+}
+
+#[test]
+fn test_show_check_candidate_below_and_above_directions() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("UberCast", None).expect("show");
+
+    for (i, lufs) in [-17.0, -16.0, -15.0, -14.0].iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, *lufs, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Below usual
+    let quiet_cand = create_test_media_source("/test/quiet.wav", 60.0, -20.0, -1.5);
+    let quiet_check = service.run_show_check_for_media(&show.id, &quiet_cand).expect("check");
+    let q_l = quiet_check.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(q_l.direction, MetricDirection::BelowUsual);
+
+    // Above usual
+    let loud_cand = create_test_media_source("/test/loud.wav", 60.0, -10.0, -1.5);
+    let loud_check = service.run_show_check_for_media(&show.id, &loud_cand).expect("check");
+    let l_l = loud_check.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(l_l.direction, MetricDirection::AboveUsual);
+}
+
+#[test]
+fn test_show_check_no_data_is_insufficient_data() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("EmptyShow", None).expect("show");
+
+    let candidate = create_test_media_source("/test/cand.wav", 60.0, -16.0, -1.5);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    assert_eq!(check.status, ShowCheckStatus::InsufficientData);
+    assert_eq!(check.baseline_maturity, BaselineMaturity::NoData);
+    assert_eq!(check.baseline_episode_count, 0);
+    assert_eq!(check.summary, "No baseline history available for comparison.");
+    assert!(check.metrics.is_empty());
+}
+
+#[test]
+fn test_show_check_maturity_copy_progression() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("MaturityShow", None).expect("show");
+
+    // 1 episode -> EARLY maturity
+    let ep1 = create_test_media_source("/test/ep1.wav", 60.0, -16.0, -1.5);
+    service.add_media_source_to_show(&show.id, &ep1).expect("add");
+
+    let cand_early = create_test_media_source("/test/cand_early.wav", 60.0, -12.0, -1.5);
+    let check_early = service.run_show_check_for_media(&show.id, &cand_early).expect("check");
+    assert_eq!(check_early.baseline_maturity, BaselineMaturity::Early);
+    let l_early = check_early.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert!(l_early.message.contains("Louder than the episodes currently in this Show"));
+    assert_eq!(check_early.summary, "Louder than current episodes in this Show.");
+
+    // Add 2 more episodes (total 3) -> DEVELOPING maturity
+    for (i, lufs) in [-15.5, -16.5].iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i + 2), 60.0, *lufs, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    let check_dev = service.run_show_check_for_media(&show.id, &cand_early).expect("check");
+    assert_eq!(check_dev.baseline_maturity, BaselineMaturity::Developing);
+    let l_dev = check_dev.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert!(l_dev.message.contains("Louder than this Show usually runs"));
+    assert_eq!(check_dev.summary, "Noticeably louder than this Show usually runs.");
+
+    // Add 2 more episodes (total 5) -> ESTABLISHED maturity
+    for (i, lufs) in [-16.0, -15.8].iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i + 4), 60.0, *lufs, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    let check_est = service.run_show_check_for_media(&show.id, &cand_early).expect("check");
+    assert_eq!(check_est.baseline_maturity, BaselineMaturity::Established);
+    assert_eq!(check_est.summary, "Noticeably louder than this Show usually runs.");
+}
+
+#[test]
+fn test_show_check_zero_iqr_handles_small_variations() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("ZeroIQRShow", None).expect("show");
+
+    // 20 episodes all at exactly -16.0 LUFS -> Q1 = -16.0, Q3 = -16.0, IQR = 0.0
+    for i in 0..20 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -16.0, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate at -15.9 LUFS (0.1 LU difference).
+    // Because MinTol = 0.5 LU, effective band is 0.5 LU.
+    // -15.9 <= -16.0 + 0.5 = -15.5 -> SLIGHTLY_DIFFERENT, NOT DIFFERENT!
+    let candidate = create_test_media_source("/test/cand.wav", 60.0, -15.9, -1.5);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    let l_metric = check.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(l_metric.status, MetricComparisonStatus::SlightlyDifferent);
+    assert_eq!(l_metric.direction, MetricDirection::AboveUsual);
+    assert_eq!(check.status, ShowCheckStatus::Typical); // slight differences do not make whole show check DIFFERENT
+}
+
+#[test]
+fn test_show_check_zero_dbtp_is_legitimate_value() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("ZeroPeakShow", None).expect("show");
+
+    for i in 0..5 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -16.0, -1.0);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate has 0.0 dBTP True Peak
+    let candidate = create_test_media_source("/test/cand.wav", 60.0, -16.0, 0.0);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    let tp_metric = check.metrics.iter().find(|m| m.id == "truePeak" || m.id == "true_peak").expect("tp metric");
+    assert!((tp_metric.candidate_value - 0.0).abs() < 1e-4);
+    assert_eq!(tp_metric.direction, MetricDirection::AboveUsual);
+}
+
+#[test]
+fn test_show_check_missing_candidate_metric_does_not_fail_whole_check() {
+    let baseline = ShowBaseline {
+        show_id: "show1".to_string(),
+        show_name: "TestShow".to_string(),
+        maturity: BaselineMaturity::Established,
+        total_episodes: 5,
+        eligible_episodes: 5,
+        excluded_episodes: 0,
+        exclusion_summary: crate::catalogue::baseline::BaselineExclusionSummary {
+            changed_source_count: 0,
+            missing_measurement_count: 0,
+        },
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        loudness: Some(crate::catalogue::stats::ContinuousBaselineMetric {
+            id: "loudness".to_string(),
+            label: "Loudness".to_string(),
+            unit: "LUFS".to_string(),
+            sample_count: 5,
+            median: -16.0,
+            q1: -17.0,
+            q3: -15.0,
+            min: -18.0,
+            max: -14.0,
+        }),
+        true_peak: Some(crate::catalogue::stats::ContinuousBaselineMetric {
+            id: "true_peak".to_string(),
+            label: "True Peak".to_string(),
+            unit: "dBTP".to_string(),
+            sample_count: 5,
+            median: -1.5,
+            q1: -2.0,
+            q3: -1.0,
+            min: -3.0,
+            max: -0.5,
+        }),
+        duration: None,
+        leading_silence: None,
+        trailing_silence: None,
+        bitrate: None,
+        format: None,
+        sample_rate: None,
+        channels: None,
+        codec: None,
+        clipping: crate::catalogue::baseline::ClippingBaselineSummary {
+            total_checked: 5,
+            none_count: 5,
+            possible_count: 0,
+            uncertain_count: 0,
+        },
+        loudness_history: Vec::new(),
+        true_peak_history: Vec::new(),
+    };
+
+    // Candidate has loudness = None, but true_peak = Some(-1.5)
+    let candidate = CandidateMeasurements {
+        duration_seconds: 60.0,
+        format: "WAV".to_string(),
+        codec: "pcm_s16le".to_string(),
+        sample_rate: 44100,
+        channels: 2,
+        bitrate: None,
+        integrated_loudness_lufs: None,
+        true_peak_dbtp: Some(-1.5),
+        leading_silence_seconds: None,
+        trailing_silence_seconds: None,
+    };
+
+    let check = run_show_check(&baseline, &candidate, false);
+    assert_eq!(check.status, ShowCheckStatus::Typical);
+    assert_eq!(check.metrics.len(), 1);
+    assert_eq!(check.metrics[0].id, "true_peak");
+}
+
+#[test]
+fn test_show_check_categorical_matches_and_differs() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("StereoShow", None).expect("show");
+
+    for i in 0..5 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -16.0, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Matching format WAV & Stereo
+    let matching_cand = create_test_media_source("/test/cand.wav", 60.0, -16.0, -1.5);
+    let check_match = service.run_show_check_for_media(&show.id, &matching_cand).expect("check");
+
+    let fmt = check_match.categorical_metrics.iter().find(|c| c.id == "format").unwrap();
+    assert_eq!(fmt.status, MetricComparisonStatus::Typical);
+    assert!(fmt.message.contains("Matches this Show's usual WAV format"));
+
+    // Differing channel: Mono candidate
+    let mut mono_cand = create_test_media_source("/test/mono.wav", 60.0, -19.0, -1.5);
+    mono_cand.inspection.channels = 1;
+    let check_mono = service.run_show_check_for_media(&show.id, &mono_cand).expect("check");
+
+    let ch = check_mono.categorical_metrics.iter().find(|c| c.id == "channels").unwrap();
+    assert_eq!(ch.status, MetricComparisonStatus::Different);
+    assert!(ch.message.contains("This episode is mono; this Show is usually stereo"));
+}
+
+#[test]
+fn test_show_check_publishing_assessment_independence() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("LoudShow", None).expect("show");
+
+    // Historical show averages -13.0 LUFS (loud for podcasting)
+    for i in 0..5 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -13.0, -1.0);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate is also -13.0 LUFS
+    let candidate = create_test_media_source("/test/cand.wav", 60.0, -13.0, -1.0);
+
+    // 1. PodReady Check (Assessment Engine) MUST judge ATTENTION (Loud) based on AUDIO_RULES (-16 LUFS stereo target)
+    let assessment = candidate.assessment.as_ref().unwrap();
+    assert_eq!(assessment.overall_status, OverallStatus::Attention);
+    let loudness_check = assessment.audio_checks.iter().find(|c| c.id == "loudness").unwrap();
+    assert_eq!(loudness_check.status, crate::assessment::engine::AssessmentStatus::Attention);
+
+    // 2. Show Check MUST judge TYPICAL because candidate matches the show's -13.0 LUFS history
+    let show_check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+    assert_eq!(show_check.status, ShowCheckStatus::Typical);
+    let sc_loudness = show_check.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(sc_loudness.status, MetricComparisonStatus::Typical);
+
+    // Assessment is completely unaffected by Show Check
+    assert_eq!(candidate.assessment.as_ref().unwrap().overall_status, OverallStatus::Attention);
+}
+
+#[test]
+fn test_show_check_status_combinations() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("ComboShow", None).expect("show");
+
+    for i in 0..5 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -16.0, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Combination A: PodReady READY + Show DIFFERENT
+    // -16.0 LUFS stereo, -1.5 dBTP (Ready for publishing), but duration = 1800s (30m) vs show usual 60s (1m)
+    let cand_a = create_test_media_source("/test/cand_a.wav", 1800.0, -16.0, -1.5);
+    assert_eq!(cand_a.assessment.as_ref().unwrap().overall_status, OverallStatus::Ready);
+    let check_a = service.run_show_check_for_media(&show.id, &cand_a).expect("check a");
+    assert_eq!(check_a.status, ShowCheckStatus::Different);
+
+    // Combination B: PodReady ATTENTION + Show TYPICAL
+    // -14.0 LUFS (Attention - Loud), but Show has 5 episodes at -14.0 LUFS
+    let loud_show = service.create_show("LoudShow2", None).expect("show");
+    for i in 0..5 {
+        let media = create_test_media_source(&format!("/test/ep_loud_{}.wav", i), 60.0, -14.0, -1.5);
+        service.add_media_source_to_show(&loud_show.id, &media).expect("add");
+    }
+    let cand_b = create_test_media_source("/test/cand_b.wav", 60.0, -14.0, -1.5);
+    assert_eq!(cand_b.assessment.as_ref().unwrap().overall_status, OverallStatus::Attention);
+    let check_b = service.run_show_check_for_media(&loud_show.id, &cand_b).expect("check b");
+    assert_eq!(check_b.status, ShowCheckStatus::Typical);
+}
+
+#[test]
+fn test_show_check_catalogued_episode_leave_one_out_and_n_minus_one_maturity() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("LOO_Show", None).expect("show");
+
+    // Add 5 episodes to Show (Full Show Baseline = ESTABLISHED with 5 episodes)
+    let mut ep_ids = Vec::new();
+    for i in 0..5 {
+        let lufs = if i == 4 { -10.0 } else { -16.0 }; // Episode 4 is an outlier at -10 LUFS
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, lufs, -1.5);
+        let outcome = service.add_media_source_to_show(&show.id, &media).expect("add");
+        ep_ids.push(outcome.episode_id);
+    }
+
+    // Full Show Baseline maturity is ESTABLISHED (5 episodes)
+    let full_baseline = service.get_show_baseline(&show.id).expect("full baseline");
+    assert_eq!(full_baseline.maturity, BaselineMaturity::Established);
+    assert_eq!(full_baseline.eligible_episodes, 5);
+
+    // Leave-One-Out Show Check on Episode 4 (the -10 LUFS outlier):
+    // Comparison history excludes Episode 4, leaving 4 episodes at -16.0 LUFS.
+    let check_ep4 = service.get_show_check_for_episode(&ep_ids[4]).expect("check ep4");
+
+    // LOO maturity must be DEVELOPING (4 episodes = N - 1)
+    assert_eq!(check_ep4.baseline_maturity, BaselineMaturity::Developing);
+    assert_eq!(check_ep4.baseline_episode_count, 4);
+
+    // Episode 4 at -10 LUFS is compared against 4 episodes at -16 LUFS -> DIFFERENT
+    assert_eq!(check_ep4.status, ShowCheckStatus::Different);
+    let l_ep4 = check_ep4.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(l_ep4.status, MetricComparisonStatus::Different);
+    assert_eq!(l_ep4.direction, MetricDirection::AboveUsual);
+}
+
+#[test]
+fn test_show_check_workspace_candidate_uses_full_baseline() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("WorkspaceShow", None).expect("show");
+
+    for i in 0..5 {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), 60.0, -16.0, -1.5);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    let new_candidate = create_test_media_source("/test/new_cand.wav", 60.0, -16.0, -1.5);
+    let check = service.run_show_check_for_media(&show.id, &new_candidate).expect("check");
+
+    // Candidate not in catalogue -> uses full 5 episodes -> ESTABLISHED
+    assert_eq!(check.baseline_maturity, BaselineMaturity::Established);
+    assert_eq!(check.baseline_episode_count, 5);
+}
+
+#[test]
+fn test_show_check_source_availability_missing_and_changed_states() {
+    let temp = tempdir().expect("tempdir");
+    let db_path = temp.path().join("test_source_states.db");
+    let repo = CatalogueRepository::open_file(&db_path).expect("repo");
+    let service = CatalogueService::new(repo);
+    let show = service.create_show("StateShow", None).expect("show");
+
+    // Create real files
+    let file1_path = temp.path().join("ep1.wav");
+    let file2_path = temp.path().join("ep2.wav");
+    let file3_path = temp.path().join("ep3.wav");
+    {
+        let mut f1 = File::create(&file1_path).unwrap();
+        f1.write_all(b"audio data 1").unwrap();
+        let mut f2 = File::create(&file2_path).unwrap();
+        f2.write_all(b"audio data 2").unwrap();
+        let mut f3 = File::create(&file3_path).unwrap();
+        f3.write_all(b"audio data 3").unwrap();
+    }
+
+    let m1 = create_test_media_source(file1_path.to_str().unwrap(), 60.0, -16.0, -1.5);
+    let m2 = create_test_media_source(file2_path.to_str().unwrap(), 60.0, -16.0, -1.5);
+    let m3 = create_test_media_source(file3_path.to_str().unwrap(), 60.0, -16.0, -1.5);
+
+    let _o1 = service.add_media_source_to_show(&show.id, &m1).expect("add1");
+    let o2 = service.add_media_source_to_show(&show.id, &m2).expect("add2");
+    let o3 = service.add_media_source_to_show(&show.id, &m3).expect("add3");
+
+    // 1. Delete file 2 -> MISSING state
+    std::fs::remove_file(&file2_path).unwrap();
+    let check_missing = service.get_show_check_for_episode(&o2.episode_id).expect("check missing");
+    // MISSING still displays stored comparison and is NOT marked stale
+    assert_eq!(check_missing.is_stale, false);
+    assert_eq!(check_missing.status, ShowCheckStatus::Typical);
+
+    // 2. Modify file 3 -> CHANGED state
+    {
+        let mut f3 = File::create(&file3_path).unwrap();
+        f3.write_all(b"changed audio data 333333333333333333333").unwrap();
+    }
+    let check_changed = service.get_show_check_for_episode(&o3.episode_id).expect("check changed");
+    // CHANGED displays comparison but is explicitly marked is_stale = true
+    assert_eq!(check_changed.is_stale, true);
+}
+
+#[test]
+fn test_show_check_synthetic_ubercast_calibration_fixture() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("The UberCast", None).expect("show");
+
+    // 4 historical episodes matching Stage 5D Section 15 fixture:
+    // Loudness: sorted [-23.0, -16.6, -15.4, -14.2] -> Median = -16.0, Q1 = -18.2, Q3 = -15.1 LUFS
+    // True Peak: sorted [-4.2, -1.9, -1.0, 0.0] -> Median = -1.45, Q1 = -2.475, Q3 = -0.75 dBTP
+    // Duration: sorted [31s, 44s, 79s, 85s] -> Median = 61.5s (1:02), Q1 = 40.75s (0:41), Q3 = 80.5s (1:21)
+    let eps_data = [
+        (44.0, -15.4, -1.9),
+        (31.0, -16.6, -1.0),
+        (85.0, -14.2, 0.0),
+        (79.0, -23.0, -4.2),
+    ];
+
+    for (i, (dur, lufs, tp)) in eps_data.iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.wav", i), *dur, *lufs, *tp);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate:
+    // Loudness: -15.4 LUFS (inside -18.2 → -15.1 range) -> TYPICAL
+    // True Peak: -1.0 dBTP (inside -2.475 → -0.75 range) -> TYPICAL
+    // Duration: 85.0s (1:25) (> Q3 (80.5s / 1:21), but <= Q3 + IQR (80.5 + 39.75 = 120.25s)) -> SLIGHTLY_DIFFERENT (Slightly longer)
+    let candidate = create_test_media_source("/test/candidate.wav", 85.0, -15.4, -1.0);
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    assert_eq!(check.baseline_maturity, BaselineMaturity::Developing);
+    assert_eq!(check.baseline_episode_count, 4);
+
+    let l_m = check.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(l_m.status, MetricComparisonStatus::Typical);
+    assert_eq!(l_m.direction, MetricDirection::WithinUsual);
+
+    let tp_m = check.metrics.iter().find(|m| m.id == "truePeak" || m.id == "true_peak").unwrap();
+    assert_eq!(tp_m.status, MetricComparisonStatus::Typical);
+    assert_eq!(tp_m.direction, MetricDirection::WithinUsual);
+
+    let dur_m = check.metrics.iter().find(|m| m.id == "duration").unwrap();
+    assert_eq!(dur_m.status, MetricComparisonStatus::SlightlyDifferent);
+    assert_eq!(dur_m.direction, MetricDirection::AboveUsual);
+    assert!(dur_m.message.contains("Slightly longer than the current Show baseline"));
+
+    // Overall status remains TYPICAL with minor variation summary
+    assert_eq!(check.status, ShowCheckStatus::Typical);
+    assert_eq!(check.summary, "Within normal variation for this Show with minor differences.");
+}
+
+// =========================================================================
+// STAGE 5D.1: SHOW CHECK PRODUCT REFINEMENT & CALIBRATION TESTS
+// =========================================================================
+
+#[test]
+fn test_show_check_stage_5d1_full_calibration_candidate_fixture() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("The UberCast", None).expect("show");
+
+    // 4 episodes matching Stage 5D.1 Section 14 fixture:
+    // Loudness: sorted [-23.0, -16.6, -15.4, -14.2] -> Median = -16.0, Q1 = -18.2, Q3 = -15.1
+    // True peak: sorted [-4.2, -1.9, -1.0, 0.0] -> Median = -1.45, Q1 = -2.475, Q3 = -0.75
+    // Duration: sorted [31s, 44s, 79s, 85s] -> Median = 61.5s, Q1 = 40.75s, Q3 = 80.5s
+    // Dominant: MP3, 44.1 kHz, Stereo
+    let eps = [
+        (44.0, -15.4, -1.9),
+        (31.0, -16.6, -1.0),
+        (85.0, -14.2, 0.0),
+        (79.0, -23.0, -4.2),
+    ];
+    for (i, (dur, lufs, tp)) in eps.iter().enumerate() {
+        let media = create_test_media_source(&format!("/test/ep{}.mp3", i), *dur, *lufs, *tp);
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate: Mono MP3, 1:19 (79s), -23.0 LUFS, 0.0 dBTP, 0.3s leading, 0.8s trailing, 90 kbps (90000), 44.1 kHz
+    let mut candidate = create_test_media_source("/test/candidate.mp3", 79.0, -23.0, 0.0);
+    candidate.inspection.channels = 1;
+    candidate.format = MediaFormat::MP3;
+    if let Some(m) = candidate.measurements.as_mut() {
+        m.leading_silence_seconds = 0.3;
+        m.trailing_silence_seconds = 0.8;
+    }
+    candidate.inspection.bitrate = Some(90000);
+    // Re-assess candidate with Mono configuration
+    candidate.assessment = Some(assess_media(
+        &candidate.inspection,
+        candidate.measurements.as_ref(),
+        &candidate.format,
+        &candidate.codec,
+    ));
+
+    // 1. Run Show Check
+    let check = service.run_show_check_for_media(&show.id, &candidate).expect("check");
+
+    assert_eq!(check.status, ShowCheckStatus::Different);
+    assert_eq!(check.baseline_maturity, BaselineMaturity::Developing);
+    assert_eq!(check.baseline_episode_count, 4);
+
+    // Primary story:
+    // - Loudness: -23.0 LUFS -> DIFFERENT (BelowUsual)
+    let loudness = check.metrics.iter().find(|m| m.id == "loudness").unwrap();
+    assert_eq!(loudness.status, MetricComparisonStatus::Different);
+    assert_eq!(loudness.direction, MetricDirection::BelowUsual);
+
+    // - True Peak: 0.0 dBTP -> SLIGHTLY_DIFFERENT (AboveUsual)
+    let tp = check.metrics.iter().find(|m| m.id == "truePeak" || m.id == "true_peak").unwrap();
+    assert_eq!(tp.status, MetricComparisonStatus::SlightlyDifferent);
+    assert_eq!(tp.direction, MetricDirection::AboveUsual);
+
+    // - Duration: 79.0s -> TYPICAL (WithinUsual)
+    let dur = check.metrics.iter().find(|m| m.id == "duration").unwrap();
+    assert_eq!(dur.status, MetricComparisonStatus::Typical);
+    assert_eq!(dur.direction, MetricDirection::WithinUsual);
+
+    // - Channels: Mono -> DIFFERENT (Show is Stereo)
+    let channels = check.categorical_metrics.iter().find(|m| m.id == "channels").unwrap();
+    assert_eq!(channels.status, MetricComparisonStatus::Different);
+
+    // Headline Summary synthesises the two primary differences deterministically
+    assert_eq!(
+        check.summary,
+        "Noticeably quieter than this Show usually runs and uses mono rather than the usual stereo delivery."
+    );
+
+    // 2. Critical Non-Interference Invariant:
+    // PodReady Assessment MUST independently evaluate Mono against podcast-mono-v1 target (-19.0 LUFS)
+    // and MUST NOT use the Show's -16.0 LUFS baseline!
+    let assessment = candidate.assessment.as_ref().unwrap();
+    assert_eq!(assessment.profile_id, "podcast-mono-v1");
+    let fix_plan = crate::fixplan::generate_fix_plan(assessment);
+    let l_action = fix_plan.actions.iter().find(|a| a.source_check_id == "loudness").unwrap();
+    assert_eq!(l_action.to_value.as_deref(), Some("−19.0 LUFS target"));
+}
+
+#[test]
+fn test_show_check_delivery_format_different_alone_is_different() {
+    let service = CatalogueService::new_in_memory().expect("db");
+    let show = service.create_show("DeliveryShow", None).expect("show");
+
+    for i in 0..5 {
+        let mut media = create_test_media_source(&format!("/test/ep{}.mp3", i), 60.0, -16.0, -1.5);
+        media.format = MediaFormat::MP3;
+        media.codec = "mp3".to_string();
+        service.add_media_source_to_show(&show.id, &media).expect("add");
+    }
+
+    // Candidate matches acoustics but differs in format (WAV vs MP3)
+    let mut cand = create_test_media_source("/test/cand.wav", 60.0, -16.0, -1.5);
+    cand.format = MediaFormat::WAV;
+
+    let check = service.run_show_check_for_media(&show.id, &cand).expect("check");
+    assert_eq!(check.status, ShowCheckStatus::Different);
+    assert_eq!(check.summary, "Uses WAV rather than the usual MP3 format.");
+}
+
+
 

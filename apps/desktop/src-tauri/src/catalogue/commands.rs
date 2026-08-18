@@ -6,6 +6,7 @@ use crate::catalogue::models::{
     ShowSummary, ShowWithEpisodes, UpdateShowInput,
 };
 use crate::catalogue::service::CatalogueService;
+use crate::catalogue::show_check::ShowCheck;
 use crate::error::AppError;
 use crate::media::ffprobe::MediaSource;
 
@@ -30,6 +31,23 @@ pub async fn get_show_baseline_cmd(
     catalogue: State<'_, CatalogueService>,
 ) -> Result<ShowBaseline, AppError> {
     catalogue.get_show_baseline(&id)
+}
+
+#[tauri::command]
+pub async fn get_show_check_for_episode_cmd(
+    id: String,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<ShowCheck, AppError> {
+    catalogue.get_show_check_for_episode(&id)
+}
+
+#[tauri::command]
+pub async fn run_show_check_for_media_cmd(
+    show_id: String,
+    media: MediaSource,
+    catalogue: State<'_, CatalogueService>,
+) -> Result<ShowCheck, AppError> {
+    catalogue.run_show_check_for_media(&show_id, &media)
 }
 
 #[tauri::command]
@@ -93,3 +111,4 @@ pub async fn delete_catalogue_episode_cmd(
 ) -> Result<(), AppError> {
     catalogue.delete_episode(&id)
 }
+

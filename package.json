@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "setup": "node scripts/provision-assets.js",
-    "test": "node --test scripts/provision-assets.test.js",
+    "test": "node --test scripts/*.test.js",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",

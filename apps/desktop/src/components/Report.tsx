@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   MediaSource,
   AssessmentStatus,
@@ -5,9 +7,12 @@ import type {
   ProcessAudioResponse,
   PodReadyPackage,
   ExportOptions,
+  ShowSummary,
+  ShowCheck,
 } from "@podready/domain";
 import { BulletSparkline } from "sexy-sparklines";
 import { ExportSection } from "./ExportSection";
+import { ShowCheckSection } from "./ShowCheckSection";
 
 interface ReportProps {
   media: MediaSource;
@@ -32,6 +37,50 @@ export function Report({
   onExport,
   onAddToShow,
 }: ReportProps) {
+  const [shows, setShows] = useState<ShowSummary[]>([]);
+  const [selectedShowId, setSelectedShowId] = useState<string | null>(null);
+  const [showCheck, setShowCheck] = useState<ShowCheck | null>(null);
+  const [isLoadingShowCheck, setIsLoadingShowCheck] = useState<boolean>(false);
+
+  // Load available shows
+  useEffect(() => {
+    invoke<ShowSummary[]>("get_shows_cmd")
+      .then((res) => setShows(res))
+      .catch((err) => console.error("Failed to load shows for comparison:", err));
+  }, []);
+
+  // Run Show Check when selectedShowId or media measurements update
+  useEffect(() => {
+    if (!selectedShowId || !media.measurements) {
+      setShowCheck(null);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingShowCheck(true);
+
+    invoke<ShowCheck>("run_show_check_for_media_cmd", {
+      showId: selectedShowId,
+      media,
+    })
+      .then((res) => {
+        if (isMounted) {
+          setShowCheck(res);
+          setIsLoadingShowCheck(false);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to run show check for media:", err);
+        if (isMounted) {
+          setShowCheck(null);
+          setIsLoadingShowCheck(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedShowId, media]);
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -276,6 +325,43 @@ export function Report({
           </div>
         )}
       </div>
+
+      {/* SHOW CHECK / EPISODE-TO-SHOW COMPARISON */}
+      {shows.length > 0 && assessment && !isAnalysing && (
+        <div className="space-y-3 pt-2 border-t border-gray-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-bold tracking-widest text-gray-400 uppercase">
+                Show Check
+              </h3>
+              <p className="text-[11px] text-gray-500">
+                Compare with historical Show characteristics
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <label htmlFor="show-check-select" className="text-xs text-gray-600 font-medium">
+                Compare with:
+              </label>
+              <select
+                id="show-check-select"
+                value={selectedShowId || ""}
+                onChange={(e) => setSelectedShowId(e.target.value || null)}
+                className="text-xs font-semibold bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg px-2.5 py-1 text-gray-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 cursor-pointer transition-colors"
+              >
+                <option value="">None (Select a Show…)</option>
+                {shows.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.episodeCount} {s.episodeCount === 1 ? "ep" : "eps"})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {selectedShowId && (
+            <ShowCheckSection showCheck={showCheck} isLoading={isLoadingShowCheck} />
+          )}
+        </div>
+      )}
 
       {/* PROCESSING STATE INDICATOR */}
       {isProcessing && (

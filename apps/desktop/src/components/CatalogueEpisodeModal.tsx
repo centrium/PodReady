@@ -1,10 +1,14 @@
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   CatalogueEpisode,
   AssessmentStatus,
   OverallStatus,
+  ShowCheck,
 } from "@podready/domain";
 import { formatAudioDuration } from "@podready/domain";
 import { BulletSparkline } from "sexy-sparklines";
+import { ShowCheckSection } from "./ShowCheckSection";
 
 interface CatalogueEpisodeModalProps {
   episode: CatalogueEpisode | null;
@@ -21,6 +25,38 @@ export function CatalogueEpisodeModal({
   onOpenInWorkspace,
   onDeleteEpisode,
 }: CatalogueEpisodeModalProps) {
+  const [showCheck, setShowCheck] = useState<ShowCheck | null>(null);
+  const [isLoadingShowCheck, setIsLoadingShowCheck] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isOpen || !episode) {
+      setShowCheck(null);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingShowCheck(true);
+
+    invoke<ShowCheck>("get_show_check_for_episode_cmd", { id: episode.id })
+      .then((res) => {
+        if (isMounted) {
+          setShowCheck(res);
+          setIsLoadingShowCheck(false);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load show check for episode:", err);
+        if (isMounted) {
+          setShowCheck(null);
+          setIsLoadingShowCheck(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, episode]);
+
   if (!isOpen || !episode) return null;
 
   const formatLoudness = (val?: number | null) => {
@@ -262,6 +298,9 @@ export function CatalogueEpisodeModal({
             </span>
           </div>
         </div>
+
+        {/* SHOW CHECK: LEAVE-ONE-OUT HISTORICAL COMPARISON */}
+        <ShowCheckSection showCheck={showCheck} isLoading={isLoadingShowCheck} />
 
         {/* Audio Checks with Sparklines (from saved assessment) */}
         {assessment?.audioChecks && assessment.audioChecks.length > 0 && (

@@ -19,7 +19,8 @@ use batch::{
 use catalogue::{
     add_batch_episodes_to_show_cmd, add_episode_to_show_cmd, create_show_cmd,
     delete_catalogue_episode_cmd, delete_show_cmd, get_catalogue_episode_cmd, get_show_baseline_cmd,
-    get_show_cmd, get_shows_cmd, update_show_cmd, CatalogueRepository, CatalogueService,
+    get_show_check_for_episode_cmd, get_show_cmd, get_shows_cmd, run_show_check_for_media_cmd,
+    update_show_cmd, CatalogueRepository, CatalogueService,
 };
 use error::AppError;
 use export::{create_publishing_package, ExportOptions, PodReadyPackage, ReportActionItem};
@@ -146,6 +147,8 @@ pub fn run() {
         get_shows_cmd,
         get_show_cmd,
         get_show_baseline_cmd,
+        get_show_check_for_episode_cmd,
+        run_show_check_for_media_cmd,
         create_show_cmd,
         update_show_cmd,
         delete_show_cmd,

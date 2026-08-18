@@ -193,4 +193,101 @@ ShowDetail UI (restrained editorial baseline & historical context)
    - **Zero-Value Preservation**: Measurements with a valid value of `0.0` (such as `0.0 dBTP` True Peak, `0.0s` leading/trailing silence) are preserved through database insertion, retrieval, and baseline calculation, and are never coerced to null/missing/undefined.
    - **Categorical Denominator Semantics**: Delivery characteristic denominators explicitly represent the sample count of valid observations for that specific metric.
 
+### Show Check & Episode-to-Show Comparison Engine (Stage 5D)
+PodReady provides a dedicated, deterministic comparison engine to answer: *"Does this episode look and sound like this particular show normally does?"*
+
+```text
+                                  ┌──────────────────────────────┐
+                                  │   Candidate Audio Episode    │
+                                  └──────────────┬───────────────┘
+                                                 │
+                         ┌───────────────────────┴───────────────────────┐
+                         ▼                                               ▼
+             ┌─────────────────────────┐                     ┌─────────────────────────┐
+             │      PODREADY CHECK     │                     │       SHOW CHECK        │
+             ├─────────────────────────┤                     ├─────────────────────────┤
+             │ "Is it technically      │                     │ "How does this compare  │
+             │ ready for publishing?"  │                     │ with Show history?"     │
+             ├─────────────────────────┤                     ├─────────────────────────┤
+             │ Authority:              │                     │ Authority:              │
+             │ • AUDIO_RULES.md        │                     │ • Stage 5C ShowBaseline │
+             │ • podcast-stereo-v1     │                     │ • Historical catalogue  │
+             │ • podcast-mono-v1       │                     │   measurements          │
+             ├─────────────────────────┤                     ├─────────────────────────┤
+             │ Possible Outcomes:      │                     │ Possible Outcomes:      │
+             │ READY                   │                     │ TYPICAL                 │
+             │ ATTENTION               │                     │ DIFFERENT               │
+             │ NEEDS_ATTENTION         │                     │ INSUFFICIENT_DATA       │
+             └─────────────────────────┘                     └─────────────────────────┘
+```
+
+1. **Non-Negotiable Separation of Invariants**:
+   - **PodReady Check** answers technical publishing readiness (against `AUDIO_RULES.md`).
+   - **Show Check** answers historical consistency (against `ShowBaseline`).
+   - Show Check NEVER alters Assessment, OverallStatus, publishing profiles, FixPlan, loudness targets, true peak ceilings, triggers processing, or normalizes toward Show median.
+   - Valid independent combinations include:
+     - `PodReady: READY` + `Show: TYPICAL`
+     - `PodReady: READY` + `Show: DIFFERENT` (e.g. 30-minute episode in a show of 1-minute episodes)
+     - `PodReady: ATTENTION` + `Show: TYPICAL` (e.g. historical show averaging −13 LUFS evaluated against −16 LUFS stereo target)
+     - `PodReady: NEEDS_ATTENTION` + `Show: TYPICAL`
+
+2. **Leave-One-Out (LOO) for Catalogued Episodes**:
+   - When checking Episode X from Show Y, the comparison baseline is computed using eligible episodes from Show Y **excluding Episode X**.
+   - This guarantees the candidate never participates in defining its own comparison baseline.
+   - Maturity for catalogued episode comparison reflects the sample size of other episodes ($N - 1$).
+
+3. **Workspace Pre-Catalogue Comparison**:
+   - A newly analysed episode in the Workspace can be compared against any Show before being catalogued.
+   - Uses the full eligible Show baseline (no LOO exclusion needed since candidate is not yet in the catalogue).
+   - Selecting or changing the Show recomputes Show Check instantly with zero audio re-processing.
+
+4. **Continuous Metric Comparison & Zero-IQR Tolerances**:
+   - Continuous metrics (Loudness, True Peak, Duration, Silence Boundaries, Bitrate) compare candidate values against baseline Median (Typical) and $Q_1 \rightarrow Q_3$ (Usual Range).
+   - Candidate in $[Q_1, Q_3] \implies \text{TYPICAL}$ (`WITHIN_USUAL`).
+   - $\text{EffectiveBand} = \max(Q_3 - Q_1, \text{MinTol})$, where $\text{MinTol}$ provides stability for low-variance or zero-IQR ($Q_1 = Q_3$) shows:
+     - Loudness: $\text{MinTol} = 0.5\text{ LU}$
+     - True Peak: $\text{MinTol} = 0.3\text{ dBTP}$
+     - Duration: $\text{MinTol} = 5.0\text{ s}$
+     - Leading Silence: $\text{MinTol} = 0.2\text{ s}$
+     - Trailing Silence: $\text{MinTol} = 0.5\text{ s}$
+     - Bitrate: $\text{MinTol} = 16.0\text{ kbps}$
+   - Candidate outside $[Q_1, Q_3]$:
+     - Within 1 $\text{EffectiveBand}$ outside $Q_1$ or $Q_3 \implies \text{SLIGHTLY\_DIFFERENT}$.
+     - Materially beyond 1 $\text{EffectiveBand} \implies \text{DIFFERENT}$.
+   - **Crucial Note**: These tolerances exist solely for descriptive comparison classification and are NOT publishing thresholds.
+
+5. **Maturity-Aware Human Phrasing**:
+   - `NO_DATA`: `INSUFFICIENT_DATA` (*"No baseline history available for comparison."*)
+   - `EARLY` (1–2 episodes): Cautious copy (e.g. *"This episode is louder than the episodes currently in this Show."*)
+   - `DEVELOPING` (3–4 episodes): Contextual copy (e.g. *"A little louder than the current Show baseline."*)
+   - `ESTABLISHED` (5+ episodes): Confident copy (e.g. *"This episode is louder than this Show usually runs."*)
+
+6. **Categorical Modal Comparisons**:
+   - Formats, Channels, Sample Rates, and Codecs are compared neutrally against the dominant historical mode.
+   - Differing formats (e.g. Mono in a stereo show, WAV in an MP3 show) are reported neutrally as `DIFFERENT` without implying technical publishing invalidity.
+
+7. **Clipping Decision**:
+   - Clipping is not normalized based on history (e.g. no "clipping is normal for your show").
+   - Assessment Engine remains solely authoritative for digital clipping.
+
+8. **Source Availability Semantics**:
+   - `AVAILABLE`: Live source and comparison valid.
+   - `MISSING`: Stored analysis preserved and compared.
+   - `CHANGED`: Stored analysis compared but explicitly flagged with a stale comparison warning (`is_stale: true`).
+
+9. **Stage 5D.1 Information Hierarchy & Editorial Refinement**:
+   - **Information Hierarchy**:
+     - **Primary Audio Characteristics**: Integrated Loudness, True Peak, and Duration form the primary comparison cards.
+     - **Delivery Characteristics**: Channels, Format, and Sample Rate are grouped into compact delivery summaries; redundant codec metadata (e.g. MP3 in MP3 container) is hidden from primary view.
+     - **Secondary Characteristics**: Opening/Closing Silence and Bitrate are placed in an expandable, keyboard-accessible "Technical details" disclosure. If a secondary characteristic is materially DIFFERENT, an indicator badge ensures it remains discoverable.
+   - **Deterministic Headline Summary**:
+     - Headline summaries explain *why* the episode differs by synthesising the top primary differences in deterministic priority (Loudness/Duration/Peak -> Channel configuration -> Format/Rate -> Secondary).
+     - Does not produce robotic listings, speculative causal claims, or dashboard clutter.
+   - **Centralized Formatters & Human-Friendly Precision**:
+     - Bitrate: integer kbps (e.g. `90 kbps`, `224 kbps`).
+     - Sample Rate: kHz format (e.g. `44.1 kHz`, `48 kHz`).
+     - Channels: `Mono` / `Stereo`.
+     - Duration: `m:ss` (e.g. `1:19`, `0:41 → 1:21`).
+     - Loudness & True Peak: 1 decimal place with proper minus sign (e.g. `−23.0 LUFS`, `0.0 dBTP`).
+     - Silence: 1 decimal place (e.g. `0.3s`, `0.8s`).
 

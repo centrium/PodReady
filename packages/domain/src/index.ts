@@ -475,4 +475,145 @@ export function formatBaselineDuration(metric?: ContinuousBaselineMetric | null)
   return { typical, range };
 }
 
+// Stage 5D: Show Check / Episode-to-Show Comparison Engine
 
+export type ShowCheckStatus = 'TYPICAL' | 'DIFFERENT' | 'INSUFFICIENT_DATA';
+
+export type MetricComparisonStatus =
+  | 'TYPICAL'
+  | 'SLIGHTLY_DIFFERENT'
+  | 'DIFFERENT'
+  | 'NOT_AVAILABLE';
+
+export type MetricDirection = 'BELOW_USUAL' | 'WITHIN_USUAL' | 'ABOVE_USUAL';
+
+export interface ShowCheckContinuousMetric {
+  id: string;
+  label: string;
+  unit: string;
+  candidateValue: number;
+  typicalValue: number;
+  usualLow: number;
+  usualHigh: number;
+  status: MetricComparisonStatus;
+  direction: MetricDirection;
+  message: string;
+  sampleCount: number;
+  sparkline?: SparklineConfig;
+}
+
+export interface ShowCheckCategoricalMetric {
+  id: string;
+  label: string;
+  candidateValue: string;
+  typicalValue: string;
+  dominantProportion: number;
+  status: MetricComparisonStatus;
+  message: string;
+  sampleCount: number;
+}
+
+export interface ShowCheck {
+  showId: string;
+  showName: string;
+  baselineMaturity: BaselineMaturity;
+  baselineEpisodeCount: number;
+  status: ShowCheckStatus;
+  summary: string;
+  isStale: boolean;
+  metrics: ShowCheckContinuousMetric[];
+  categoricalMetrics: ShowCheckCategoricalMetric[];
+  generatedAt: string;
+}
+
+export function formatShowCheckLoudness(metric?: ShowCheckContinuousMetric | null): { candidate: string; typical: string; range: string } {
+  if (!metric) {
+    return { candidate: '—', typical: '—', range: '—' };
+  }
+  const cSign = metric.candidateValue < 0 ? '−' : '';
+  const candidate = `${cSign}${Math.abs(metric.candidateValue).toFixed(1)} LUFS`;
+  const tSign = metric.typicalValue < 0 ? '−' : '';
+  const typical = `${tSign}${Math.abs(metric.typicalValue).toFixed(1)} LUFS`;
+  const lSign = metric.usualLow < 0 ? '−' : '';
+  const hSign = metric.usualHigh < 0 ? '−' : '';
+  const range = `${lSign}${Math.abs(metric.usualLow).toFixed(1)} → ${hSign}${Math.abs(metric.usualHigh).toFixed(1)} LUFS`;
+  return { candidate, typical, range };
+}
+
+export function formatShowCheckPeak(metric?: ShowCheckContinuousMetric | null): { candidate: string; typical: string; range: string } {
+  if (!metric) {
+    return { candidate: '—', typical: '—', range: '—' };
+  }
+  const cSign = metric.candidateValue < 0 ? '−' : '';
+  const candidate = `${cSign}${Math.abs(metric.candidateValue).toFixed(1)} dBTP`;
+  const tSign = metric.typicalValue < 0 ? '−' : '';
+  const typical = `${tSign}${Math.abs(metric.typicalValue).toFixed(1)} dBTP`;
+  const lSign = metric.usualLow < 0 ? '−' : '';
+  const hSign = metric.usualHigh < 0 ? '−' : '';
+  const range = `${lSign}${Math.abs(metric.usualLow).toFixed(1)} → ${hSign}${Math.abs(metric.usualHigh).toFixed(1)} dBTP`;
+  return { candidate, typical, range };
+}
+
+export function formatShowCheckDuration(metric?: ShowCheckContinuousMetric | null): { candidate: string; typical: string; range: string } {
+  if (!metric) {
+    return { candidate: '—', typical: '—', range: '—' };
+  }
+  const candidate = formatAudioDuration(metric.candidateValue);
+  const typical = formatAudioDuration(metric.typicalValue);
+  const range = `${formatAudioDuration(metric.usualLow)} → ${formatAudioDuration(metric.usualHigh)}`;
+  return { candidate, typical, range };
+}
+
+export function formatShowCheckSilence(metric?: ShowCheckContinuousMetric | null): { candidate: string; typical: string; range: string } {
+  if (!metric) {
+    return { candidate: '—', typical: '—', range: '—' };
+  }
+  const candidate = `${metric.candidateValue.toFixed(1)}s`;
+  const typical = `${metric.typicalValue.toFixed(1)}s`;
+  const range = `${metric.usualLow.toFixed(1)}s → ${metric.usualHigh.toFixed(1)}s`;
+  return { candidate, typical, range };
+}
+
+export function formatShowCheckBitrate(metric?: ShowCheckContinuousMetric | null): { candidate: string; typical: string; range: string } {
+  if (!metric) {
+    return { candidate: '—', typical: '—', range: '—' };
+  }
+  const toKbps = (val: number): number => Math.round(val >= 1000 ? val / 1000 : val);
+  const candidate = `${toKbps(metric.candidateValue)} kbps`;
+  const typical = `${toKbps(metric.typicalValue)} kbps`;
+  const range = `${toKbps(metric.usualLow)} → ${toKbps(metric.usualHigh)} kbps`;
+  return { candidate, typical, range };
+}
+
+export function formatSampleRateDisplay(sr: number | string | undefined | null): string {
+  if (sr === undefined || sr === null) return '—';
+  let num: number;
+  if (typeof sr === 'number') {
+    num = sr;
+  } else {
+    const cleaned = sr.toString().replace(/[^0-9.]/g, '');
+    num = parseFloat(cleaned);
+  }
+  if (isNaN(num) || num <= 0) return typeof sr === 'string' ? sr : '—';
+
+  // If already in kHz format e.g. 44.1 or 48
+  if (num < 1000) {
+    return `${num} kHz`;
+  }
+  const inKhz = num / 1000;
+  // Format with up to 2 decimal places, trimming unnecessary trailing zeros
+  const formatted = inKhz % 1 === 0 ? inKhz.toFixed(0) : inKhz.toString();
+  return `${formatted} kHz`;
+}
+
+export function formatChannelDisplay(ch: number | string | undefined | null): string {
+  if (ch === undefined || ch === null) return '—';
+  const str = ch.toString().trim().toLowerCase();
+  if (str === '1' || str === 'mono') return 'Mono';
+  if (str === '2' || str === 'stereo') return 'Stereo';
+  const num = parseInt(str, 10);
+  if (!isNaN(num)) {
+    return num === 1 ? 'Mono' : num === 2 ? 'Stereo' : `${num} Channels`;
+  }
+  return ch.toString();
+}

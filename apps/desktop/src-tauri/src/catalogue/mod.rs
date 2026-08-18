@@ -4,6 +4,7 @@ pub mod migrations;
 pub mod models;
 pub mod repository;
 pub mod service;
+pub mod show_check;
 pub mod stats;
 
 #[cfg(test)]
@@ -17,5 +18,8 @@ pub use models::*;
 pub use repository::CatalogueRepository;
 pub use service::CatalogueService;
 #[allow(unused_imports)]
+pub use show_check::*;
+#[allow(unused_imports)]
 pub use stats::*;
+
 
